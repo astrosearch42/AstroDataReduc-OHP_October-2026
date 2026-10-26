@@ -1,0 +1,1 @@
+Copier coller le dossier data du repo de strasbourg : https://github.com/pocvirk/astronomical_data_reduction

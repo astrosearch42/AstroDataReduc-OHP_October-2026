@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Data files
+data/
+
+# miscellaneous
+src/astrodatareduc_ohp_october_2026/Utils/misc/*
