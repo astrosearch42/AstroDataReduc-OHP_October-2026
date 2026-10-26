@@ -1,0 +1,1 @@
+reduced_img = (light - mediane[bias ou dark])/([Flat - bias]_normalisé_à_1)
