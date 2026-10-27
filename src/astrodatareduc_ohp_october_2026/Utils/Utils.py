@@ -1,9 +1,27 @@
+import os
+
 lazy import matplotlib.pyplot as plt
 lazy import numpy as np
 lazy from astropy.io import fits
 lazy from matplotlib import cm
 lazy from matplotlib.colors import LogNorm
 lazy from pathlib import Path
+
+### Path
+OFFSET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'offsets'))
+FLAT_DIR   = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'flats'))
+ALL_FLAT_DIR = os.listdir(FLAT_DIR)
+
+MASTER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'masters'))
+
+
+FLTRNM_OHP = {
+    'R Cousins': 'R',
+    'V Cousins': 'V',
+    'B Cousins': 'B',
+    'H Alpha ohp 6565': 'Ha',
+    'O3 ohp 5007': 'O3',
+}
 
 def tk_window_folder_selection():
     """
