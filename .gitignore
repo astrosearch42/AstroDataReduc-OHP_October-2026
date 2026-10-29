@@ -10,7 +10,11 @@ wheels/
 .venv
 
 # Data files
-data/
+data/*/*/*reduced*
+data/*/*/*norm*
+data/*/*/*aligned*
+data/*/*/*stacked*
+data/*/masters/*
 
 # miscellaneous
 src/astrodatareduc_ohp_october_2026/Utils/misc/*

@@ -1,37 +1,62 @@
-import os
-import glob
 from pathlib import Path
 
-from .Utils.Utils import *
+from .Utils.Utils import (
+    MASTER_DIR,
+    np,
+    filter_name_from_header,
+    plot_image,
+    read_raw_image,
+    tk_window_folder_selection,
+    write_fits_image,
+)
 
-# Now reduce the observed images:
-# 1=> subtract bias
-# 2=> divide by flat WITH THE CORRESPONDING FILTER!!
-DATADIR = tk_window_folder_selection()
-files=glob.glob(os.path.join(DATADIR, '*.fits'))
 
-def reduce_images(files):
-    reduced_file = None
-    for file in files:
-        data,header=read_raw_image(file,get_header=1)
-        filter_name=FLTRNM_OHP[header['FLTRNM'].strip()]
-        master_bias=read_raw_image(os.path.join(MASTER_DIR, 'master_bias.fits'))
-        master_flat=read_raw_image(os.path.join(MASTER_DIR, f'master_flat_{filter_name}.fits'))
-        # THE IMPORTANT, KEY PART!!!
-        ##########################
-        reduced=(data-master_bias)/master_flat
-        ##########################
-        reduced_file=Path(file).stem+f'_{filter_name}_reduced'+Path(file).suffix
-        reduced_file=os.path.join(DATADIR, reduced_file)
-        write_fits_image(reduced_file,reduced,header)
-        print('Reduced file written to ',reduced_file)
-    return reduced_file
-    
+def reduce_images(files, master_dark=None):
+    """Reduce raw science images with the matching bias and normalized flat."""
+    input_files = [Path(file) for file in files]
+    if not input_files:
+        raise ValueError("No FITS science images were provided")
 
-# do this for each filter or automatize
+    master_bias = read_raw_image(Path(MASTER_DIR) / "master_bias.fits")
+    dark_data = read_raw_image(master_dark) if master_dark is not None else None
+    reduced_files = []
+
+    for file in input_files:
+        if file.stem.lower().endswith("_reduced"):
+            continue
+        data, header = read_raw_image(file, get_header=1)
+        filter_name = filter_name_from_header(header)
+        master_flat = read_raw_image(
+            Path(MASTER_DIR) / f"master_flat_{filter_name}.fits"
+        )
+        if data.shape != master_bias.shape or data.shape != master_flat.shape:
+            raise ValueError(f"Calibration shape mismatch for {file}")
+        if dark_data is not None and dark_data.shape != data.shape:
+            raise ValueError(f"Dark shape mismatch for {file}")
+
+        calibrated = data.astype(np.float64) - master_bias
+        if dark_data is not None:
+            calibrated -= dark_data
+        with np.errstate(divide="ignore", invalid="ignore"):
+            reduced = calibrated / master_flat
+        reduced[~np.isfinite(reduced)] = np.nan
+
+        output = file.with_name(f"{file.stem}_{filter_name}_reduced{file.suffix}")
+        header["CALIBRAT"] = "BIAS+FLAT" if dark_data is None else "BIAS+DARK+FLAT"
+        header["FLTRCAL"] = filter_name
+        write_fits_image(output, reduced, header)
+        print("Reduced file written to", output)
+        reduced_files.append(output)
+
+    return reduced_files
+
 
 def main() -> None:
-    # Example usage
-    reduced_file=reduce_images(files)
-    data_reduced=read_raw_image(reduced_file)
-    plot_image(data_reduced)
+    data_dir = Path(tk_window_folder_selection())
+    files = sorted(
+        path for path in data_dir.glob("*.fits")
+        if not path.stem.lower().endswith("_reduced")
+    )
+    reduced_files = reduce_images(files)
+    if reduced_files:
+        plot_image(read_raw_image(reduced_files[-1]))

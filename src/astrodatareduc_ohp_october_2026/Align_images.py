@@ -4,6 +4,7 @@ import astroalign as aa
 import numpy as np
 
 from .Utils.Utils import (
+    image_group_key,
     read_raw_image,
     tk_window_folder_selection,
     write_fits_image,
@@ -22,7 +23,7 @@ def fits_files(directory: Path) -> list[Path]:
         if path.is_file()
         and path.suffix.lower() == ".fits"
         and REDUCED_MARKER in path.stem.lower()
-        and path.stem.lower().endswith(ALIGNED_SUFFIX) is False
+        and not path.stem.lower().endswith(ALIGNED_SUFFIX)
     )
 
 
@@ -62,9 +63,7 @@ def align_images(
         )
         return []
 
-    if reference_file is None:
-        reference_path = files[0]
-    else:
+    if reference_file is not None:
         reference_path = Path(reference_file)
         if not reference_path.is_absolute():
             reference_path = input_dir / reference_path
@@ -78,26 +77,51 @@ def align_images(
     destination_dir = Path(output_dir) if output_dir is not None else input_dir
     destination_dir.mkdir(parents=True, exist_ok=True)
 
-    reference_data, _ = read_image(reference_path)
-    aligned_files: list[Path] = []
-    for source_path in files:
-        source_data, header = read_image(source_path)
-        if source_path.resolve() == reference_path:
-            aligned_data = source_data
-        else:
-            try:
-                aligned_data, _ = aa.register(source_data, reference_data)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Impossible d'aligner {source_path.name} sur "
-                    f"{reference_path.name} : {exc}"
-                ) from exc
+    if reference_file is None:
+        groups = {}
+        for path in files:
+            _, header = read_raw_image(path, get_header=1)
+            groups.setdefault(image_group_key(header), []).append(path)
+        reference_groups = [
+            (group_files[0], group_files)
+            for group_files in groups.values()
+        ]
+    else:
+        _, reference_header = read_image(reference_path)
+        reference_group = image_group_key(reference_header)
+        group_files = [
+            path for path in files
+            if image_group_key(read_raw_image(path, get_header=1)[1]) == reference_group
+        ]
+        reference_groups = [(reference_path, group_files)]
 
-        destination = destination_dir / (
-            f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"
-        )
-        write_fits_image(destination, aligned_data, header)
-        aligned_files.append(destination)
+    aligned_files: list[Path] = []
+    for group_reference, group_files in reference_groups:
+        reference_data, _ = read_image(group_reference)
+        for source_path in group_files:
+            source_data, header = read_image(source_path)
+            if source_path.resolve() == group_reference.resolve():
+                aligned_data = source_data
+            else:
+                try:
+                    aligned_data, _ = aa.register(source_data, reference_data)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Impossible d'aligner {source_path.name} sur "
+                        f"{group_reference.name} : {exc}"
+                    ) from exc
+
+            destination = destination_dir / (
+                f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"
+            )
+            header["ALIGNREF"] = group_reference.name
+            for keyword in (
+                "WCSAXES", "CTYPE1", "CTYPE2", "CRPIX1", "CRPIX2",
+                "CRVAL1", "CRVAL2", "CDELT1", "CDELT2",
+            ):
+                header.remove(keyword, ignore_missing=True)
+            write_fits_image(destination, aligned_data, header)
+            aligned_files.append(destination)
 
     return aligned_files
 
