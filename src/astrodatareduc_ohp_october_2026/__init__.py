@@ -3,6 +3,7 @@ lazy from astrodatareduc_ohp_october_2026.Make_Masters import main as main_make_
 lazy from astrodatareduc_ohp_october_2026.Reduce_FITS import main as main_reduce_fits
 lazy from astrodatareduc_ohp_october_2026.Align_images import main as main_align_images
 lazy from astrodatareduc_ohp_october_2026.Stack_images import main as main_stack_images
+lazy from astrodatareduc_ohp_october_2026.gui import main as main_gui
 
 
 def main() -> None:

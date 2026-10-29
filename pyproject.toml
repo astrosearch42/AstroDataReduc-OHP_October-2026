@@ -12,10 +12,12 @@ dependencies = [
     "astropy>=8.0.2",
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
+    "pyside6>=6.9.2",
 ]
 
 [project.scripts]
 astrodatareduc = "astrodatareduc_ohp_october_2026:main"
+astrodatareduc-gui = "astrodatareduc_ohp_october_2026.gui:main"
 
 [build-system]
 requires = ["uv_build>=0.13.0,<0.14.0"]
