@@ -15,6 +15,8 @@ data/*/*/*norm*
 data/*/*/*aligned*
 data/*/*/*stacked*
 data/*/masters/*
+data/2023/*
+data/2024/*
 
 # miscellaneous
 src/astrodatareduc_ohp_october_2026/Utils/misc/*
