@@ -21,7 +21,7 @@ def aligned_fits_files(directory: Path) -> list[Path]:
     )
 
 
-def stack_images(lights_dir: str | Path) -> Path | None:
+def stack_images(lights_dir: str | Path, output_dir: str | Path | None = None) -> list[Path]:
     """Median-stack aligned FITS images from ``lights_dir``.
 
     The result is written in the selected directory as
@@ -31,13 +31,15 @@ def stack_images(lights_dir: str | Path) -> Path | None:
     if not input_dir.is_dir():
         raise NotADirectoryError(f"Dossier FITS introuvable : {input_dir}")
 
+    output_path = Path(output_dir) if output_dir is not None else input_dir
+    output_path.mkdir(parents=True, exist_ok=True)
     files = aligned_fits_files(input_dir)
     if not files:
         print(
             "Aucun fichier FITS aligné (*_aligned*.fits) trouvé "
             f"dans {input_dir}."
         )
-        return None
+        return []
 
     groups = {}
     for file in files:
@@ -70,7 +72,7 @@ def stack_images(lights_dir: str | Path) -> Path | None:
             stacked_data = np.nanmedian(clipped_stack, axis=0)
         object_name, filter_name, exposure = group
         safe_exposure = str(exposure).replace(".", "p")
-        output_file = input_dir / (
+        output_file = output_path / (
             f"stacked_{object_name}_{filter_name}_{safe_exposure}s.fits"
         )
         header["OBJECT"] = f"STACKED_{object_name}_{filter_name}"

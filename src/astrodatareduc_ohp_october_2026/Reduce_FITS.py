@@ -11,13 +11,15 @@ from .Utils.Utils import (
 )
 
 
-def reduce_images(files, master_dark=None):
+def reduce_images(files, master_dark=None, master_dir=MASTER_DIR, output_dir=None):
     """Reduce raw science images with the matching bias and normalized flat."""
     input_files = [Path(file) for file in files]
     if not input_files:
         raise ValueError("No FITS science images were provided")
 
-    master_bias = read_raw_image(Path(MASTER_DIR) / "master_bias.fits")
+    master_dir = Path(master_dir)
+    output_dir = Path(output_dir) if output_dir is not None else None
+    master_bias = read_raw_image(master_dir / "master_bias.fits")
     dark_data = read_raw_image(master_dark) if master_dark is not None else None
     reduced_files = []
 
@@ -27,7 +29,7 @@ def reduce_images(files, master_dark=None):
         data, header = read_raw_image(file, get_header=1)
         filter_name = filter_name_from_header(header)
         master_flat = read_raw_image(
-            Path(MASTER_DIR) / f"master_flat_{filter_name}.fits"
+            master_dir / f"master_flat_{filter_name}.fits"
         )
         if data.shape != master_bias.shape or data.shape != master_flat.shape:
             raise ValueError(f"Calibration shape mismatch for {file}")
@@ -41,7 +43,9 @@ def reduce_images(files, master_dark=None):
             reduced = calibrated / master_flat
         reduced[~np.isfinite(reduced)] = np.nan
 
-        output = file.with_name(f"{file.stem}_{filter_name}_reduced{file.suffix}")
+        destination_dir = output_dir if output_dir is not None else file.parent
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        output = destination_dir / f"{file.stem}_{filter_name}_reduced{file.suffix}"
         header["CALIBRAT"] = "BIAS+FLAT" if dark_data is None else "BIAS+DARK+FLAT"
         header["FLTRCAL"] = filter_name
         write_fits_image(output, reduced, header)

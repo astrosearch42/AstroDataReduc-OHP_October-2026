@@ -14,6 +14,7 @@ data/*/*/*reduced*
 data/*/*/*norm*
 data/*/*/*aligned*
 data/*/*/*stacked*
+data/*/stacked/*
 data/*/masters/*
 data/2023/*
 data/2024/*

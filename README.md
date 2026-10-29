@@ -19,6 +19,26 @@ Les masters sont produits dans `data/photo/masters`. Les flats bruts sont
 lus depuis `data/photo/flats/<filtre>` ; les fichiers suffixés `_norm` sont
 ignorés comme produits dérivés.
 
+## Application Qt6
+
+Une interface graphique est disponible avec :
+
+```powershell
+uv run astrodatareduc-gui
+```
+
+Elle permet de sélectionner séparément les dossiers des lights, bias,
+darks (optionnels), flats, masters et la destination des stacks. Les
+opérations longues s'exécutent dans un thread séparé ; les messages du
+pipeline sont affichés dans le journal de la fenêtre. Les images réduites
+et alignées restent dans le dossier des lights, tandis que les fichiers
+`stacked_*.fits` sont écrits uniquement dans le dossier de sortie choisi.
+
+Le bouton « Créer les masters » produit le master bias, les masters flats
+et, si un dossier de darks est fourni, un `master_dark.fits` construit par
+médiane après soustraction du bias. Les darks doivent être acquis avec un
+temps de pose et une température compatibles avec les lights.
+
 ## Limites scientifiques
 
 La réduction accepte un master dark optionnel via l'API Python, mais les
