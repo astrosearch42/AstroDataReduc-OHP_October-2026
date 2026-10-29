@@ -23,6 +23,26 @@ FLTRNM_OHP = {
     'O3 ohp 5007': 'O3',
 }
 
+
+def filter_name_from_header(header):
+    """Return the canonical filter name stored in an OHP FITS header."""
+    raw_filter = header.get("FLTRNM")
+    if raw_filter is None:
+        raise KeyError("Header keyword FLTRNM is missing")
+    filter_name = raw_filter.strip()
+    try:
+        return FLTRNM_OHP[filter_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown OHP filter name: {filter_name!r}") from exc
+
+
+def image_group_key(header):
+    """Return the object/filter/exposure identity used for stacking."""
+    object_name = str(header.get("OBJECT", "")).strip().split(" / ")[0]
+    filter_name = filter_name_from_header(header)
+    exposure = header.get("TM-EXPOS", header.get("EXPTIME"))
+    return object_name, filter_name, exposure
+
 def tk_window_folder_selection():
     """
     Ouvre une fenêtre Tkinter pour sélectionner un dossier.
@@ -92,6 +112,8 @@ def read_raw_image(fits_file, get_header=0):
     with fits.open(fits_file) as hdulist:
         data = hdulist[0].data.copy()
         header = hdulist[0].header.copy()
+    if data is None:
+        raise ValueError(f"FITS file contains no primary image: {fits_file}")
     if get_header == 0:
         return data
     if get_header == 1:
@@ -127,6 +149,8 @@ def plot_fits(file, exp=None):
         vmin,vmax=get_scaling(data)
         plt.imshow(data,cmap=cm.gray,norm=None,origin='lower',aspect='auto',vmin=vmin,vmax=vmax)
         plt.colorbar()
+    else:
+        raise ValueError("exp must be 'linear', 'log', or 'autostretch'")
     plt.show()
 
 def ADU_px_hist(file):
