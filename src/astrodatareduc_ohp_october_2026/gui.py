@@ -5,24 +5,31 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import redirect_stdout
 
-from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QTimer, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QFrame,
     QScrollArea,
+    QSlider,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -30,11 +37,13 @@ from PySide6.QtWidgets import (
 )
 
 from .align_images import align_images
+from .combine_colors import align_channels, combine_channels
+from .combine_colors import detect_channel_candidates
 from .make_masters import make_master_dark, make_master_flat, make_master_offset
 from .reduce_fits import reduce_images
 from .stack_images import stack_images
 from .Utils.Utils import (
-    MASTER_DIR,
+    DATADIR_GUI,
     Path,
     debayer_bilinear,
     existing_master_files_by_type,
@@ -87,6 +96,122 @@ class WorkerOutput:
             self.buffer = ""
 
 
+class ChannelSelectionDialog(QDialog):
+    def __init__(
+        self,
+        candidates: dict[str, list[tuple[Path, str, fits.Header]]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Choisir les fichiers des canaux")
+        self.setMinimumWidth(620)
+        self.selected_files: dict[str, Path] = {}
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            "Plusieurs fichiers correspondent à certains canaux. "
+            "Sélectionnez un fichier pour chaque canal."
+        ))
+        self._groups: dict[str, list[QRadioButton]] = {}
+        for channel, values in candidates.items():
+            if len(values) < 2:
+                continue
+            group = QGroupBox(f"Canal {channel}")
+            group.setStyleSheet(
+                "QGroupBox { border: 1px solid palette(mid); "
+                "border-radius: 4px; margin-top: 8px; padding-top: 8px; }"
+            )
+            group_layout = QVBoxLayout(group)
+            choices_layout = QGridLayout()
+            radios: list[QRadioButton] = []
+            radio_group = QButtonGroup(group)
+            radio_group.setExclusive(True)
+            differences = self._header_differences(values)
+            tiles: list[QFrame] = []
+            for path, _, _ in values:
+                file_frame = QFrame()
+                file_frame.setFrameShape(QFrame.Shape.StyledPanel)
+                file_frame.setStyleSheet(
+                    "QFrame { border: 1px solid palette(mid); "
+                    "border-radius: 3px; padding: 4px; }"
+                )
+                file_layout = QVBoxLayout(file_frame)
+                radio = QRadioButton(path.name)
+                radio_group.addButton(radio)
+                radio.setProperty("selected_path", str(path))
+                radio.toggled.connect(self._update_accept_button)
+                details = QLabel(differences.get(path, "Aucune différence de header."))
+                details.setWordWrap(True)
+                file_layout.addWidget(radio)
+                file_layout.addWidget(details)
+                radios.append(radio)
+                tiles.append(file_frame)
+            for index, tile in enumerate(tiles):
+                row, column = divmod(index, 2)
+                if index == len(tiles) - 1 and len(tiles) % 2:
+                    choices_layout.addWidget(
+                        tile, row, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter
+                    )
+                else:
+                    choices_layout.addWidget(tile, row, column)
+            group_layout.addLayout(choices_layout)
+            self._groups[channel] = radios
+            layout.addWidget(group)
+
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        self._buttons.accepted.connect(self._accept_selection)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
+        self._update_accept_button()
+
+    @staticmethod
+    def _header_differences(
+        values: list[tuple[Path, str, fits.Header]],
+    ) -> dict[Path, str]:
+        keys = sorted({key for _, _, header in values for key in header})
+        differing_keys = [
+            key for key in keys
+            if len({str(header.get(key, "")) for _, _, header in values}) > 1
+        ]
+        return {
+            path: "\n".join(
+                f"{key} = {header.get(key, '<absent>')}"
+                for key in differing_keys
+            )
+            for path, _, header in values
+        }
+
+    def _update_accept_button(self) -> None:
+        enabled = all(
+            any(radio.isChecked() for radio in radios)
+            for radios in self._groups.values()
+        )
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(enabled)
+
+    def _accept_selection(self) -> None:
+        self.selected_files = {
+            channel: Path(str(radio.property("selected_path")))
+            for channel, radios in self._groups.items()
+            for radio in radios
+            if radio.isChecked()
+        }
+        self.accept()
+
+
+class ImageScrollArea(QScrollArea):
+    zoom_requested = Signal(int)
+
+    def wheelEvent(self, event: object) -> None:
+        angle_delta = event.angleDelta().y()
+        if angle_delta:
+            self.zoom_requested.emit(1 if angle_delta > 0 else -1)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+
 class FitsViewer(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -96,12 +221,32 @@ class FitsViewer(QWidget):
         self.display_notice.setWordWrap(True)
         self.image = QLabel("Sélectionnez un fichier FITS à afficher.")
         self.source_pixmap: QPixmap | None = None
+        self.zoom_factor = 1.0
         self.data: np.ndarray | None = None
         self.header: fits.Header | None = None
         self.source_path: Path | None = None
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumSize(320, 240)
         self.image.setScaledContents(False)
+        self.image_scroll = ImageScrollArea()
+        self.image_scroll.setWidget(self.image)
+        self.image_scroll.setWidgetResizable(True)
+        self.image_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_scroll.zoom_requested.connect(self.change_zoom)
+        zoom_out = QPushButton("−")
+        zoom_out.clicked.connect(lambda: self.change_zoom(-1))
+        zoom_in = QPushButton("+")
+        zoom_in.clicked.connect(lambda: self.change_zoom(1))
+        zoom_reset = QPushButton("Réinitialiser")
+        zoom_reset.clicked.connect(self.reset_zoom)
+        self.zoom_label = QLabel("Zoom : ajusté")
+        zoom_controls = QHBoxLayout()
+        zoom_controls.addWidget(QLabel("Zoom :"))
+        zoom_controls.addWidget(zoom_out)
+        zoom_controls.addWidget(zoom_in)
+        zoom_controls.addWidget(zoom_reset)
+        zoom_controls.addWidget(self.zoom_label)
+        zoom_controls.addStretch()
         open_button = QPushButton("Ouvrir un fichier FITS…")
         open_button.clicked.connect(self.choose_file)
         self.display_method = QComboBox()
@@ -126,15 +271,16 @@ class FitsViewer(QWidget):
         display_controls.addWidget(self.display_method)
         display_controls.addWidget(self.debayer_button)
         layout.addLayout(display_controls)
+        layout.addLayout(zoom_controls)
         layout.addWidget(self.file_label)
         layout.addWidget(self.display_notice)
-        layout.addWidget(self.image, 1)
+        layout.addWidget(self.image_scroll, 1)
 
     def choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Ouvrir une image FITS",
-            "C:/Users/bertr/Documents/Coding/UGA/M2/AstroObs/AstroDataReduc-OHP_October-2026/data",
+            DATADIR_GUI,
             "FITS (*.fit *.fits)",
         )
         if path:
@@ -163,6 +309,7 @@ class FitsViewer(QWidget):
             return
 
         self.file_label.setText(str(path))
+        self.zoom_factor = 1.0
         if self.data.ndim == 2 and self.header.get("BAYERPAT"):
             self.display_notice.setText(
                 "Image couleur débayerisée uniquement pour l'affichage. "
@@ -213,6 +360,21 @@ class FitsViewer(QWidget):
                 self.fit_image()
             except (ValueError, TypeError) as exc:
                 self.file_label.setText(f"Erreur d'affichage : {exc}")
+
+    def change_zoom(self, direction: int) -> None:
+        if self.source_pixmap is None:
+            return
+        self.zoom_factor = min(
+            20.0,
+            max(0.1, self.zoom_factor * (1.25 if direction > 0 else 0.8)),
+        )
+        self.zoom_label.setText(f"Zoom : {self.zoom_factor:.2f}×")
+        self.fit_image()
+
+    def reset_zoom(self) -> None:
+        self.zoom_factor = 1.0
+        self.zoom_label.setText("Zoom : ajusté")
+        self.fit_image()
 
     def to_rgb(self, data: np.ndarray, bayer_pattern: object = None) -> QImage:
         method = str(self.display_method.currentData())
@@ -275,9 +437,17 @@ class FitsViewer(QWidget):
 
     def fit_image(self) -> None:
         if self.source_pixmap is not None and not self.source_pixmap.isNull():
+            viewport_size = self.image_scroll.viewport().size()
+            source_size = self.source_pixmap.size()
+            fit_scale = min(
+                viewport_size.width() / source_size.width(),
+                viewport_size.height() / source_size.height(),
+            )
+            scale = max(0.01, fit_scale * self.zoom_factor)
+            target_size = source_size * scale
             self.image.setPixmap(
                 self.source_pixmap.scaled(
-                    self.image.size(),
+                    target_size,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -290,6 +460,18 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("AstroDataReduc", "OHP")
         self.thread: QThread | None = None
         self.worker: PipelineWorker | None = None
+        self.rgb_selected_files: dict[str, Path] = {}
+        self.rgb_selection_context: tuple[str, str, str] | None = None
+        self.rgb_files_valid = False
+        self.rgb_aligned_valid = False
+        self.rgb_alignment_context: tuple[str, str, str] | None = None
+        self.rgb_recombination_pending = False
+        self.rgb_recombination_timer = QTimer(self)
+        self.rgb_recombination_timer.setSingleShot(True)
+        self.rgb_recombination_timer.setInterval(50)
+        self.rgb_recombination_timer.timeout.connect(
+            self.start_rgb_combination
+        )
         self.setWindowTitle("AstroDataReduc OHP - réduction FITS")
         self.setMinimumSize(1100, 700)
         self.resize(1200, 760)
@@ -306,43 +488,73 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
 
         options = QWidget()
-        options.setMinimumWidth(390)
+        options.setMinimumWidth(430)
         options_layout = QVBoxLayout(options)
         folders = QGroupBox("Dossiers de données")
-        form = QFormLayout(folders)
+        folders_layout = QVBoxLayout(folders)
         self.fields: dict[str, QLabel] = {}
-        row = QHBoxLayout()
+        parent_title = QLabel("Dossier parent")
         parent_label = QLabel("Non sélectionné")
         parent_label.setWordWrap(True)
         choose_button = QPushButton("Choisir…")
         choose_button.clicked.connect(self.choose_parent_folder)
-        row.addWidget(parent_label, 1)
-        row.addWidget(choose_button)
-        form.addRow("Dossier parent", row)
+        parent_row = QHBoxLayout()
+        parent_row.addWidget(parent_title)
+        parent_row.addStretch()
+        parent_row.addWidget(choose_button)
+        folders_layout.addLayout(parent_row)
+        folders_layout.addWidget(parent_label)
         self.fields["parent"] = parent_label
-        for key, title in (
+        parent_separator = QFrame()
+        parent_separator.setFrameShape(QFrame.Shape.HLine)
+        parent_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        folders_layout.addWidget(parent_separator)
+        folder_grid = QGridLayout()
+        for index, (key, title) in enumerate((
             ("lights", "lights"),
             ("bias", "biases"),
             ("dark", "darks"),
             ("flats", "flats"),
             ("masters", "masters (automatique)"),
             ("process", "process (automatique)"),
-            ("stack_output", "Sortie finale (parent)"),
-        ):
+        )):
             label = QLabel("Non sélectionné")
             label.setWordWrap(True)
-            form.addRow(title, label)
+            title_label = QLabel(title)
+            row, column = divmod(index, 2)
+            content_column = column * 2
+            folder_grid.addWidget(title_label, row * 2, content_column)
+            folder_grid.addWidget(label, row * 2 + 1, content_column)
             self.fields[key] = label
+        column_separator = QFrame()
+        column_separator.setFrameShape(QFrame.Shape.VLine)
+        column_separator.setStyleSheet(
+            "QFrame { border-left: 1px dotted palette(mid); }"
+        )
+        folder_grid.addWidget(column_separator, 0, 1, 6, 1)
+        folder_grid.setColumnStretch(0, 1)
+        folder_grid.setColumnStretch(2, 1)
+        folders_layout.addLayout(folder_grid)
+        output_separator = QFrame()
+        output_separator.setFrameShape(QFrame.Shape.HLine)
+        output_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        folders_layout.addWidget(output_separator)
+        output_title = QLabel("Sortie finale (parent\\recomb_colors)")
+        output_label = QLabel("Non sélectionné")
+        output_label.setWordWrap(True)
+        folders_layout.addWidget(output_title)
+        folders_layout.addWidget(output_label)
+        self.fields["stack_output"] = output_label
         options_layout.addWidget(folders)
 
         calibration = QGroupBox("Calibrations à utiliser pour la réduction")
-        calibration_layout = QHBoxLayout(calibration)
+        calibration_layout = QVBoxLayout(calibration)
         self.dark_calibration = QRadioButton("Dark (préféré)")
         self.bias_calibration = QRadioButton("Bias")
         self.dark_calibration.setChecked(True)
         self.debayer_after_stack = QCheckBox("Débayeriser après empilement")
         self.sound_on_finish = QCheckBox("Son en fin d'action")
-        self.sound_on_finish.setChecked(True)
+        self.sound_on_finish.setChecked(False)
         calibration_layout.addWidget(QLabel("Correction :"))
         calibration_layout.addWidget(self.dark_calibration)
         calibration_layout.addWidget(self.bias_calibration)
@@ -351,7 +563,7 @@ class MainWindow(QMainWindow):
         options_layout.addWidget(calibration)
 
         actions = QGroupBox("Traitement")
-        actions_layout = QHBoxLayout(actions)
+        actions_layout = QVBoxLayout(actions)
         self.buttons: dict[str, QPushButton] = {}
         for key, title in (
             ("masters", "Créer les masters"),
@@ -380,6 +592,10 @@ class MainWindow(QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         options_scroll.setWidget(options)
+        self.rgb_tab = self.build_rgb_tab()
+        self.left_tabs = QTabWidget()
+        self.left_tabs.addTab(options_scroll, "Réduction")
+        self.left_tabs.addTab(self.rgb_tab, "Recombinaison RGB")
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -389,15 +605,341 @@ class MainWindow(QMainWindow):
         self.right_tabs.addTab(self.viewer, "Visionneuse FITS")
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(options_scroll)
+        splitter.addWidget(self.left_tabs)
         splitter.addWidget(self.right_tabs)
-        splitter.setStretchFactor(0, 0)
+        self.left_tabs.setMinimumWidth(430)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 700])
+        splitter.setSizes([470, 690])
         layout.addWidget(splitter)
 
+    def build_rgb_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        form = QFormLayout()
+
+        folder_row = QHBoxLayout()
+        self.rgb_folder = QLineEdit()
+        self.rgb_folder.setPlaceholderText("Dossier contenant les 3 FITS empilés")
+        self.rgb_folder.textChanged.connect(self.invalidate_rgb_detection)
+        choose_button = QPushButton("Choisir…")
+        choose_button.clicked.connect(self.choose_rgb_folder)
+        folder_row.addWidget(self.rgb_folder, 1)
+        folder_row.addWidget(choose_button)
+        form.addRow("Dossier des canaux", folder_row)
+
+        self.rgb_filter_keyword = QLineEdit("FLTRNM")
+        self.rgb_filter_keyword.textChanged.connect(self.invalidate_rgb_detection)
+        self.rgb_filter_keyword.setToolTip(
+            "Clé FITS contenant le nom du filtre, par exemple FLTRNM ou FLTR."
+        )
+        form.addRow("Clé FITS du filtre", self.rgb_filter_keyword)
+        self.rgb_mode = QComboBox()
+        self.rgb_mode.addItems(
+            ["RGB", "HOO", "SHO", "RGB+Ha", "RGB+HOO", "RGB+SHO"]
+        )
+        self.rgb_mode.currentTextChanged.connect(self.update_narrowband_controls)
+        self.rgb_mode.currentTextChanged.connect(self.invalidate_rgb_detection)
+        form.addRow("Mode de recombinaison", self.rgb_mode)
+        layout.addLayout(form)
+
+        coefficients = QGroupBox("Contribution narrowband")
+        coefficients_layout = QVBoxLayout(coefficients)
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Préréglage :"))
+        self.rgb_preset = QComboBox()
+        self.rgb_preset.addItem("Couleurs naturelles dominantes (30 %)", 30)
+        self.rgb_preset.addItem("Équilibré (50 %)", 50)
+        self.rgb_preset.addItem("Narrowband dominant (70 %)", 70)
+        self.rgb_preset.currentIndexChanged.connect(self.apply_narrowband_preset)
+        preset_row.addWidget(self.rgb_preset)
+        coefficients_layout.addLayout(preset_row)
+        self.rgb_sliders: dict[str, QSlider] = {}
+        self.rgb_coefficient_labels: dict[str, QLabel] = {}
+        for channel, label in (("R", "Rouge"), ("G", "Vert"), ("B", "Bleu")):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(30)
+            slider.setTracking(True)
+            value_label = QLabel("30 %")
+            slider.valueChanged.connect(
+                lambda value, key=channel, target=value_label:
+                target.setText(f"{value} %")
+            )
+            slider.valueChanged.connect(self.schedule_rgb_recombination)
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            coefficients_layout.addLayout(row)
+            self.rgb_sliders[channel] = slider
+            self.rgb_coefficient_labels[channel] = value_label
+        layout.addWidget(coefficients)
+        self.rgb_coefficients_group = coefficients
+        self.update_narrowband_controls(self.rgb_mode.currentText())
+
+        self.detect_button = QPushButton("Détecter les fichiers")
+        self.detect_button.clicked.connect(self.detect_rgb_files)
+        layout.addWidget(self.detect_button)
+        self.rgb_files_status = QLabel(
+            "Aucun fichier détecté."
+        )
+        self.rgb_files_status.setWordWrap(True)
+        layout.addWidget(self.rgb_files_status)
+
+        self.align_button = QPushButton("Aligner les images")
+        self.align_button.clicked.connect(self.start_rgb_alignment)
+        self.align_button.setEnabled(False)
+        layout.addWidget(self.align_button)
+
+        self.combine_button = QPushButton("Recombiner les canaux")
+        self.combine_button.clicked.connect(self.start_rgb_combination)
+        self.combine_button.setEnabled(False)
+        layout.addWidget(self.combine_button)
+        self.rgb_status = QLabel(
+            "Filtres reconnus : R, G, B, Ha, H Alpha, O3, OIII, SII, "
+            "R Cousins, V Cousins, B Cousins, H Alpha ohp 6565 et "
+            "O3 ohp 5007."
+        )
+        self.rgb_status.setWordWrap(True)
+        layout.addWidget(self.rgb_status)
+        layout.addStretch()
+        return tab
+
+    def choose_rgb_folder(self) -> None:
+        previous = self.rgb_folder.text() or DATADIR_GUI
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier des canaux RGB", previous
+        )
+        if path:
+            self.rgb_folder.setText(path)
+
+    def invalidate_rgb_detection(self) -> None:
+        self.rgb_files_valid = False
+        self.rgb_aligned_valid = False
+        self.rgb_selected_files = {}
+        self.rgb_selection_context = None
+        self.rgb_alignment_context = None
+        self.rgb_recombination_pending = False
+        self.rgb_recombination_timer.stop()
+        if self.thread is None and hasattr(self, "combine_button"):
+            self.combine_button.setEnabled(False)
+            self.align_button.setEnabled(False)
+
+    def start_rgb_combination(self) -> None:
+        if (
+            not self.rgb_files_valid
+            or not self.rgb_aligned_valid
+        ):
+            return
+        if self.thread is not None:
+            self.rgb_recombination_pending = True
+            return
+        self.rgb_recombination_pending = False
+        directory = Path(self.rgb_folder.text().strip())
+        keyword = self.rgb_filter_keyword.text().strip()
+        if not directory.is_dir():
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                f"Le dossier des canaux est introuvable : {directory}",
+            )
+            return
+        if not keyword:
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                "Indiquez le nom de la clé FITS du filtre.",
+            )
+            return
+        mode = self.rgb_mode.currentText()
+        coefficients = {
+            channel: slider.value() / 100
+            for channel, slider in self.rgb_sliders.items()
+        }
+        context = (str(directory.resolve()), keyword, mode)
+        selected_files = self.rgb_selected_files
+        if self.rgb_alignment_context != context:
+            self.rgb_aligned_valid = False
+            self.combine_button.setEnabled(False)
+            return
+        try:
+            candidates = detect_channel_candidates(directory, keyword, mode)
+        except (OSError, ValueError) as exc:
+            self.rgb_files_valid = False
+            self.combine_button.setEnabled(False)
+            self.log.appendPlainText(f"ERREUR : {exc}")
+            self.rgb_files_status.setText(f"Erreur de détection : {exc}")
+            return
+        if any(len(values) > 1 for values in candidates.values()):
+            missing_choices = [
+                channel for channel, values in candidates.items()
+                if len(values) > 1 and channel not in selected_files
+            ]
+            if missing_choices:
+                self.rgb_files_status.setText(
+                    "Détectez les fichiers et sélectionnez un candidat "
+                    "pour chaque canal ambigu avant de recombiner."
+                )
+                self.rgb_files_valid = False
+                self.combine_button.setEnabled(False)
+                return
+        self.start_operation(
+            f"combine_{mode.lower()}",
+            lambda: [combine_channels(
+                directory,
+                filter_keyword=keyword,
+                mode=mode,
+                narrowband_coefficients=coefficients,
+                selected_files=selected_files,
+            )],
+        )
+
+    def schedule_rgb_recombination(self) -> None:
+        if not self.rgb_aligned_valid:
+            return
+        self.rgb_recombination_pending = True
+        self.rgb_recombination_timer.start()
+
+    def start_rgb_alignment(self) -> None:
+        if self.thread is not None or not self.rgb_files_valid:
+            return
+        directory = Path(self.rgb_folder.text().strip())
+        keyword = self.rgb_filter_keyword.text().strip()
+        mode = self.rgb_mode.currentText()
+        selected_files = self.rgb_selected_files
+        self.start_operation(
+            f"align_{mode.lower()}",
+            lambda: [align_channels(
+                directory,
+                filter_keyword=keyword,
+                mode=mode,
+                selected_files=selected_files,
+            )],
+        )
+
+    def apply_narrowband_preset(self, index: int) -> None:
+        value = int(self.rgb_preset.itemData(index))
+        for slider in self.rgb_sliders.values():
+            slider.setValue(value)
+
+    def update_narrowband_controls(self, mode: str) -> None:
+        narrowband_mode = mode in {"RGB+Ha", "RGB+HOO", "RGB+SHO"}
+        self.rgb_coefficients_group.setEnabled(narrowband_mode)
+        for channel, slider in self.rgb_sliders.items():
+            slider.setEnabled(mode != "RGB+Ha" or channel == "R")
+
+    def detect_rgb_files(self) -> None:
+        directory = Path(self.rgb_folder.text().strip())
+        keyword = self.rgb_filter_keyword.text().strip()
+        mode = self.rgb_mode.currentText()
+        if not directory.is_dir():
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                f"Le dossier des canaux est introuvable : {directory}",
+            )
+            return
+        if not keyword:
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                "Indiquez le nom de la clé FITS du filtre.",
+            )
+            return
+        try:
+            candidates = detect_channel_candidates(directory, keyword, mode)
+        except (OSError, ValueError) as exc:
+            self.rgb_files_valid = False
+            self.combine_button.setEnabled(False)
+            self.rgb_files_status.setText(f"Erreur de détection : {exc}")
+            return
+        ambiguous = {
+            channel: values
+            for channel, values in candidates.items()
+            if len(values) > 1
+        }
+        selected_files: dict[str, Path] = {}
+        if ambiguous:
+            dialog = ChannelSelectionDialog(ambiguous, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                self.rgb_selected_files = {}
+                self.rgb_selection_context = None
+                self.rgb_files_valid = False
+                self.combine_button.setEnabled(False)
+                self.log.appendPlainText(
+                    "ERREUR : détection annulée, aucun choix de fichier "
+                    "n'a été validé."
+                )
+                self.rgb_files_status.setText("Détection annulée.")
+                return
+            selected_files = dialog.selected_files
+        self.rgb_selected_files = selected_files
+        self.rgb_selection_context = (
+            str(directory.resolve()), keyword, mode
+        )
+        channels: dict[str, tuple[Path, str]] = {}
+        for channel, values in candidates.items():
+            selected = selected_files.get(channel)
+            match = next(
+                (
+                    value for value in values
+                    if selected is not None and value[0].resolve() == selected.resolve()
+                ),
+                None,
+            )
+            if match is None and len(values) == 1:
+                match = values[0]
+            if match is not None:
+                channels[channel] = (match[0], match[1])
+        self.rgb_files_valid = True
+        self.rgb_aligned_valid = False
+        self.rgb_alignment_context = None
+        self.align_button.setEnabled(self.thread is None)
+        self.combine_button.setEnabled(False)
+        labels = {"R": "Rouge", "G": "Vert", "B": "Bleu"}
+        lines = [f"<b>Mode {mode}</b>"]
+        if mode == "RGB+Ha":
+            lines.append("Rouge = R + Ha | Vert = G | Bleu = B")
+        elif mode == "RGB+HOO":
+            lines.append(
+                "Rouge = R + Ha | Vert = G + OIII | Bleu = B + OIII"
+            )
+        elif mode == "RGB+SHO":
+            lines.append(
+                "Rouge = R + SII | Vert = G + Ha | Bleu = B + OIII"
+            )
+        for channel in ("R", "G", "B"):
+            if channel not in channels:
+                source_channel = "G" if mode == "HOO" and channel == "B" else channel
+                path, raw_filter = channels[source_channel]
+                lines.append(
+                    f"{labels[channel]} : {path.name}<br>"
+                    f"Header {keyword} : {raw_filter}"
+                )
+            else:
+                path, raw_filter = channels[channel]
+                lines.append(
+                    f"{labels[channel]} : {path.name}<br>"
+                    f"Header {keyword} : {raw_filter}"
+                )
+        if mode in {"RGB+Ha", "RGB+HOO", "RGB+SHO"}:
+            extras = (
+                ("HA",)
+                if mode == "RGB+Ha"
+                else ("HA", "OIII")
+                if mode == "RGB+HOO"
+                else ("SII", "HA", "OIII")
+            )
+            for extra in extras:
+                path, raw_filter = channels[extra]
+                lines.append(
+                    f"{extra} : {path.name}<br>"
+                    f"Header {keyword} : {raw_filter}"
+                )
+        self.rgb_files_status.setText("<br><br>".join(lines))
+
     def choose_parent_folder(self) -> None:
-        previous = self.settings.value("folder/parent", str(Path.home()))
+        previous = self.settings.value(
+            "folder/parent",
+            DATADIR_GUI
+            )
         path = QFileDialog.getExistingDirectory(self, "Sélectionner un dossier", str(previous))
         if path:
             self.settings.setValue("folder/parent", path)
@@ -425,11 +967,28 @@ class MainWindow(QMainWindow):
             "flats": "flats",
             "masters": "masters",
             "process": "process",
-            "stack_output": "",
+            "stack_output": "recomb_colors",
         }
         for key, name in names.items():
-            path = None if parent is None else parent / name if name else parent
-            self.fields[key].setText(str(path) if path is not None else "Non sélectionné")
+            path = (
+                None
+                if parent is None
+                else parent.parent / name
+                if key == "stack_output"
+                else parent / name
+            )
+            display_path = self._display_folder_path(key, path)
+            self.fields[key].setText(display_path)
+            if path is not None:
+                self.fields[key].setToolTip(str(path))
+
+    @staticmethod
+    def _display_folder_path(key: str, path: Path | None) -> str:
+        if path is None:
+            return "Non sélectionné"
+        if key in {"parent", "stack_output"}:
+            return str(path)
+        return str(Path("...") / path.parent.name / path.name)
 
     def path(self, key: str) -> Path | None:
         if key == "parent":
@@ -439,7 +998,7 @@ class MainWindow(QMainWindow):
         if parent is None:
             return None
         if key == "stack_output":
-            return parent
+            return parent.parent / "recomb_colors"
         names = {
             "lights": "lights",
             "bias": "biases",
@@ -484,8 +1043,12 @@ class MainWindow(QMainWindow):
             return
         if job is None:
             return
+        self.start_operation(operation, job)
+
+    def start_operation(self, operation: str, job: Callable[[], object]) -> None:
         self.progress.setRange(0, 0)
         self.set_busy(True)
+        self.combine_button.setEnabled(False)
         self.current_operation = operation
         self.log.appendPlainText(f">>> {operation}")
         self.thread = QThread(self)
@@ -574,9 +1137,8 @@ class MainWindow(QMainWindow):
         dark = self.path("dark")
         flats = self.path("flats")
         use_dark = self.dark_calibration.isChecked()
-        masters = masters or (
-            lights / "masters" if lights is not None else Path(MASTER_DIR)
-        )
+        if masters is None:
+            raise ValueError("Le dossier des masters n'est pas sélectionné.")
         if bias is None or flats is None:
             raise ValueError("Sélectionnez les dossiers bias et flats.")
         if not bias.is_dir():
@@ -641,9 +1203,19 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy: bool) -> None:
         for button in self.buttons.values():
             button.setEnabled(not busy)
+        self.detect_button.setEnabled(not busy)
+        self.align_button.setEnabled(not busy and self.rgb_files_valid)
+        self.combine_button.setEnabled(not busy and self.rgb_aligned_valid)
 
     @Slot(object)
     def operation_finished(self, result: object) -> None:
+        if self.current_operation.startswith("align_"):
+            self.rgb_aligned_valid = True
+            self.rgb_alignment_context = (
+                str(Path(self.rgb_folder.text().strip()).resolve()),
+                self.rgb_filter_keyword.text().strip(),
+                self.rgb_mode.currentText(),
+            )
         count = len(result) if isinstance(result, list) else 1
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
@@ -658,6 +1230,9 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def operation_failed(self, message: str) -> None:
+        if self.current_operation.startswith("align_"):
+            self.rgb_aligned_valid = False
+            self.rgb_alignment_context = None
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.log.appendPlainText(f"ERREUR : {message}")
@@ -671,6 +1246,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.set_busy(False)
         self.update_buttons()
+        if self.rgb_recombination_pending and self.rgb_aligned_valid:
+            self.rgb_recombination_timer.start()
 
 
 def main() -> None:

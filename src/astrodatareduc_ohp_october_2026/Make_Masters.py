@@ -24,9 +24,9 @@ def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
     data, header_ori = read_raw_image(files[0], get_header=1)
     if data.ndim != 2:
         raise ValueError("Les images d'offset doivent être en deux dimensions")
-    datastore = np.empty((nfiles, *data.shape), dtype=data.dtype)
+    datastore = np.empty((nfiles, *data.shape), dtype=np.float32)
     for i, file in enumerate(files):
-        current = np.asarray(read_raw_image(file), dtype=data.dtype)
+        current = np.asarray(read_raw_image(file), dtype=np.float32)
         if current.shape != data.shape:
             raise ValueError(f"Les images d'offset ont des dimensions incompatibles : {file}")
         datastore[i] = current
@@ -41,7 +41,7 @@ def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
     header['CALIBRAT'] = 'BIAS'
     header['COMBINE'] = 'MEDIAN'
     header['NCOMBINE'] = nfiles
-    write_fits_image(master_bias_file, result.astype(data.dtype), header)
+    write_fits_image(master_bias_file, result.astype(np.float32), header)
     print(f'Master bias créé et enregistré dans {master_bias_file}')
     return master_bias_file
 
@@ -105,7 +105,7 @@ def make_master_flat(flat_dir=FLAT_DIR, master_bias_file=None, output_dir=MASTER
         header['CALIBRAT'] = 'FLAT'
         header['COMBINE'] = 'MEDIAN'
         header['NCOMBINE'] = nfiles
-        write_fits_image(master_flat_file, result.astype(data.dtype), header)
+        write_fits_image(master_flat_file, result.astype(np.float32), header)
         print(f'Master flat créé et enregistré dans {master_flat_file}')
     return master_flat_file
 
@@ -118,9 +118,9 @@ def make_master_dark(dark_dir, output_dir=MASTER_DIR):
     first, header = read_raw_image(files[0], get_header=1)
     if first.ndim != 2:
         raise ValueError("Les images dark doivent être en deux dimensions")
-    stack = np.empty((len(files), *first.shape), dtype=first.dtype)
+    stack = np.empty((len(files), *first.shape), dtype=np.float32)
     for index, file in enumerate(files):
-        data = np.asarray(read_raw_image(file), dtype=first.dtype)
+        data = np.asarray(read_raw_image(file), dtype=np.float32)
         if data.shape != first.shape:
             raise ValueError(f"Les images dark ont des dimensions incompatibles : {file}")
         stack[index] = data
@@ -132,7 +132,7 @@ def make_master_dark(dark_dir, output_dir=MASTER_DIR):
     header["CALIBRAT"] = "BIAS+DARK"
     header["COMBINE"] = "MEDIAN"
     header["NCOMBINE"] = len(files)
-    write_fits_image(output, result.astype(first.dtype), header)
+    write_fits_image(output, result.astype(np.float32), header)
     print(f"Master dark créé et enregistré dans {output}")
     return output
 

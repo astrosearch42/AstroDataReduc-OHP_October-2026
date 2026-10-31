@@ -8,11 +8,14 @@ lazy from astropy.io import fits
 lazy from matplotlib import cm
 lazy from matplotlib.colors import LogNorm
 
-### Chemins
+### Chemins utiles pour l'utilisation du code en mode non gui
 OFFSET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'offsets'))
 FLAT_DIR   = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'flats'))
 ALL_FLAT_DIR = os.listdir(FLAT_DIR)
 MASTER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'masters'))
+
+### Chemins utiles pour l'utilisation du code en mode gui
+DATADIR_GUI = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'OBJ'))
 
 ### Dictionnaires utiles à modifier si nécessaire
 FLTRNM_OHP = {

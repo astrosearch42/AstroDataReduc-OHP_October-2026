@@ -79,6 +79,9 @@ def align_images(
 
     destination_dir = Path(output_dir) if output_dir is not None else input_dir
     destination_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[Alignement] Dossier source : {input_dir}")
+    print(f"[Alignement] Dossier de sortie : {destination_dir}")
+    print(f"[Alignement] Fichiers détectés : {len(files)}")
 
     if reference_file is None:
         groups = {}
@@ -109,15 +112,32 @@ def align_images(
             f"Référence d'alignement : {group_reference.name} "
             f"({len(group_files)} image(s))."
         )
+        print(
+            "[Alignement] La référence est chargée ; astroalign cherchera "
+            "les étoiles communes dans chaque autre image."
+        )
         reference_data, _ = read_image(group_reference)
 
         def align_one(source_path):
+            print(f"[Alignement] Lecture de {source_path.name}...")
             source_data, header = read_image(source_path)
             if source_path.resolve() == group_reference.resolve():
                 aligned_data = source_data
+                print(
+                    f"[Alignement] {source_path.name} est la référence : "
+                    "aucune transformation nécessaire."
+                )
             else:
                 try:
+                    print(
+                        f"[Alignement] Recherche de la transformation "
+                        f"{source_path.name} -> {group_reference.name}..."
+                    )
                     aligned_data, _ = aa.register(source_data, reference_data)
+                    print(
+                        f"[Alignement] Transformation trouvée pour "
+                        f"{source_path.name}; reprojection terminée."
+                    )
                 except ValueError as exc:
                     raise ValueError(
                         f"Impossible d'aligner {source_path.name} sur "
@@ -134,6 +154,10 @@ def align_images(
             ):
                 header.remove(keyword, ignore_missing=True)
             write_fits_image(destination, aligned_data, header)
+            print(
+                f"[Alignement] Écriture de l'image alignée : "
+                f"{destination.name}"
+            )
             return destination
 
         with ThreadPoolExecutor(
@@ -148,6 +172,78 @@ def align_images(
         for destination in group_outputs:
             print(f"Image alignée écrite : {destination.name}")
 
+    print(f"Alignement terminé : {len(aligned_files)} image(s) produite(s).")
+    return aligned_files
+
+
+def align_selected_images(
+    files: list[str | Path],
+    output_dir: str | Path,
+    reference_file: str | Path | None = None,
+) -> list[Path]:
+    """Aligne une sélection d'images 2D sur une référence commune."""
+    input_files = [Path(file) for file in files]
+    if not input_files:
+        raise ValueError("Aucun fichier FITS à aligner.")
+    if any(not file.is_file() for file in input_files):
+        missing = next(file for file in input_files if not file.is_file())
+        raise FileNotFoundError(f"Fichier FITS introuvable : {missing}")
+
+    reference_path = (
+        Path(reference_file) if reference_file is not None else input_files[0]
+    )
+    if reference_path.resolve() not in {file.resolve() for file in input_files}:
+        raise ValueError("La référence doit faire partie des fichiers à aligner.")
+
+    reference_data, _ = read_image(reference_path)
+    print(
+        f"[Alignement] Référence : {reference_path.name} "
+        f"(dimensions : {reference_data.shape})."
+    )
+    print(
+        f"[Alignement] {len(input_files)} fichier(s) vont être traité(s) "
+        "séquentiellement."
+    )
+    destination_dir = Path(output_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    aligned_files = []
+    for source_path in input_files:
+        print(f"[Alignement] Lecture de {source_path.name}...")
+        source_data, header = read_image(source_path)
+        if source_path.resolve() == reference_path.resolve():
+            aligned_data = source_data
+            print(
+                f"[Alignement] {source_path.name} est la référence : "
+                "copie sans transformation."
+            )
+        else:
+            try:
+                print(
+                    f"[Alignement] Astroalign recherche les étoiles communes "
+                    f"pour {source_path.name} -> {reference_path.name}..."
+                )
+                aligned_data, _ = aa.register(source_data, reference_data)
+                print(
+                    f"[Alignement] Astroalign a terminé la reprojection de "
+                    f"{source_path.name}."
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Impossible d'aligner {source_path.name} sur "
+                    f"{reference_path.name} : {exc}"
+                ) from exc
+        destination = destination_dir / (
+            f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"
+        )
+        header["ALIGNREF"] = reference_path.name
+        for keyword in (
+            "WCSAXES", "CTYPE1", "CTYPE2", "CRPIX1", "CRPIX2",
+            "CRVAL1", "CRVAL2", "CDELT1", "CDELT2",
+        ):
+            header.remove(keyword, ignore_missing=True)
+        write_fits_image(destination, aligned_data, header)
+        print(f"[Alignement] Fichier écrit : {destination.name}")
+        aligned_files.append(destination)
     print(f"Alignement terminé : {len(aligned_files)} image(s) produite(s).")
     return aligned_files
 
