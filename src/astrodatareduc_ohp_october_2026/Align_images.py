@@ -1,27 +1,29 @@
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import astroalign as aa
-import numpy as np
 
 from .Utils.Utils import (
+    FITS_SUFFIXES,
+    Path,
     image_group_key,
+    np,
+    processing_workers,
     read_raw_image,
     tk_window_folder_selection,
     write_fits_image,
 )
-
 
 ALIGNED_SUFFIX = "_aligned"
 REDUCED_MARKER = "_reduced"
 
 
 def fits_files(directory: Path) -> list[Path]:
-    """Return reduced FITS files, excluding generated alignment outputs."""
+    """Retourne les fichiers FITS réduits, en excluant les sorties d'alignement."""
     return sorted(
         path
         for path in directory.iterdir()
         if path.is_file()
-        and path.suffix.lower() == ".fits"
+        and path.suffix.lower() in FITS_SUFFIXES
         and REDUCED_MARKER in path.stem.lower()
         and not path.stem.lower().endswith(ALIGNED_SUFFIX)
     )
@@ -44,12 +46,13 @@ def align_images(
     lights_dir: str | Path,
     reference_file: str | Path | None = None,
     output_dir: str | Path | None = None,
+    workers: int | None = None,
 ) -> list[Path]:
-    """Align every FITS image in ``lights_dir`` to one reference image.
+    """Aligne chaque image FITS de ``lights_dir`` sur une image de référence.
 
-    The reference defaults to the first FITS file in alphabetical order.
-    Aligned files are written with the ``_aligned`` suffix and the original
-    FITS header is preserved.
+    La référence est par défaut le premier fichier FITS dans l'ordre alphabétique.
+    Les fichiers alignés reçoivent le suffixe ``_aligned`` et l'en-tête FITS
+    original est conservé.
     """
     input_dir = Path(lights_dir)
     if not input_dir.is_dir():
@@ -58,7 +61,7 @@ def align_images(
     files = fits_files(input_dir)
     if not files:
         print(
-            "Aucun fichier FITS réduit (*_reduced*.fits) trouvé. "
+            "Aucun fichier FITS réduit (*_reduced*.fit ou *.fits) trouvé. "
             "Il faut réduire les données avant de les aligner."
         )
         return []
@@ -96,9 +99,19 @@ def align_images(
         reference_groups = [(reference_path, group_files)]
 
     aligned_files: list[Path] = []
-    for group_reference, group_files in reference_groups:
+    total_files = sum(len(group_files) for _, group_files in reference_groups)
+    print(
+        f"Les calculs en cours : alignement astroalign de {total_files} image(s) "
+        f"dans {len(reference_groups)} groupe(s)."
+    )
+    def align_group(group_reference, group_files):
+        print(
+            f"Référence d'alignement : {group_reference.name} "
+            f"({len(group_files)} image(s))."
+        )
         reference_data, _ = read_image(group_reference)
-        for source_path in group_files:
+
+        def align_one(source_path):
             source_data, header = read_image(source_path)
             if source_path.resolve() == group_reference.resolve():
                 aligned_data = source_data
@@ -121,8 +134,21 @@ def align_images(
             ):
                 header.remove(keyword, ignore_missing=True)
             write_fits_image(destination, aligned_data, header)
-            aligned_files.append(destination)
+            return destination
 
+        with ThreadPoolExecutor(
+            max_workers=processing_workers(workers)
+        ) as executor:
+            futures = [executor.submit(align_one, path) for path in group_files]
+            return [future.result() for future in futures]
+
+    for group_reference, group_files in reference_groups:
+        group_outputs = align_group(group_reference, group_files)
+        aligned_files.extend(group_outputs)
+        for destination in group_outputs:
+            print(f"Image alignée écrite : {destination.name}")
+
+    print(f"Alignement terminé : {len(aligned_files)} image(s) produite(s).")
     return aligned_files
 
 

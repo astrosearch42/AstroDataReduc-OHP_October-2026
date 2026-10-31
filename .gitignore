@@ -19,5 +19,10 @@ data/*/masters/*
 data/2023/*
 data/2024/*
 
+data/OBJ/
+
 # miscellaneous
 src/astrodatareduc_ohp_october_2026/Utils/misc/*
+
+# Tests kept locally but excluded from the GitHub repository
+tests/

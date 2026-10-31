@@ -1,14 +1,14 @@
-lazy from astrodatareduc_ohp_october_2026.Analyse import main as main_analyse
-lazy from astrodatareduc_ohp_october_2026.Make_Masters import main as main_make_masters
-lazy from astrodatareduc_ohp_october_2026.Reduce_FITS import main as main_reduce_fits
-lazy from astrodatareduc_ohp_october_2026.Align_images import main as main_align_images
-lazy from astrodatareduc_ohp_october_2026.Stack_images import main as main_stack_images
-lazy from astrodatareduc_ohp_october_2026.gui import main as main_gui
+lazy from .align_images import main as main_align_images
+lazy from .analyse import main as main_analyse
+lazy from .gui import main as main_gui
+lazy from .make_masters import main as main_make_masters
+lazy from .reduce_fits import main as main_reduce_fits
+lazy from .stack_images import main as main_stack_images
 
 
 def main() -> None:
-    print("Running Analysis module...")
-    ToDo = input("What do you want to do? (a: Analyse, m: Make Masters, r: Reduce FITS, align: Align Images, stack: Stack Images): ")
+    print("Lancement du module d'analyse...")
+    ToDo = input("Que voulez-vous faire ? (a : analyser, m : créer les masters, r : réduire les FITS, align : aligner les images, stack : empiler les images, gui : lancer l'interface graphique) : ")
     if ToDo.lower() == "a":
         main_analyse()
     elif ToDo.lower() == "m":
@@ -19,3 +19,5 @@ def main() -> None:
         main_align_images()
     elif ToDo.lower() == "stack":
         main_stack_images()
+    elif ToDo.lower() == "gui":
+        main_gui()
