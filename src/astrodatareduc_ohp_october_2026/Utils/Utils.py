@@ -8,6 +8,9 @@ lazy from astropy.io import fits
 lazy from matplotlib import cm
 lazy from matplotlib.colors import LogNorm
 
+### Version de l'application GUI
+version_app = "1.0.0"
+
 ### Chemins utiles pour l'utilisation du code en mode non gui
 OFFSET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'offsets'))
 FLAT_DIR   = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'flats'))

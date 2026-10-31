@@ -51,6 +51,7 @@ from .Utils.Utils import (
     iter_fits_files,
     np,
     sys,
+    version_app,
     write_fits_image,
 )
 
@@ -472,7 +473,16 @@ class MainWindow(QMainWindow):
         self.rgb_recombination_timer.timeout.connect(
             self.start_rgb_combination
         )
-        self.setWindowTitle("AstroDataReduc OHP - réduction FITS")
+        self.setWindowTitle(f"AstroDataReduc OHP - réduction FITS - v{version_app}")
+        self.statusBar().addPermanentWidget(QLabel("© 2026 - @astrosearch42 (Maxime Bertrand)"))
+        self.statusBar().setStyleSheet("""
+            QStatusBar {
+                background-color: #252525;
+                color: #aaaaaa;
+                border-top: 1px solid #444444;
+                font-size: 10px;
+            }
+        """)
         self.setMinimumSize(1100, 700)
         self.resize(1200, 760)
         self.build_ui()
