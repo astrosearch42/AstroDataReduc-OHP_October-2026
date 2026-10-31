@@ -58,14 +58,14 @@ def stack_images(
             f"{len(group_files)} image(s) pour le groupe {group}."
         )
         first_data, header = read_raw_image(group_files[0], get_header=1)
-        if first_data.ndim != 2:
+        if first_data.ndim not in {2, 3}:
             raise ValueError(f"Image FITS invalide : {group_files[0]}")
         image_shape = first_data.shape
         data_stack = np.empty((len(group_files), *image_shape), dtype=np.float32)
         data_stack[0] = np.asarray(first_data, dtype=np.float32)
         for index, file in enumerate(group_files[1:], start=1):
             data = read_raw_image(file)
-            if data.ndim != 2 or data.shape != image_shape:
+            if data.ndim != first_data.ndim or data.shape != image_shape:
                 raise ValueError(
                     f"Les images doivent avoir la même forme 2D : "
                     f"{file} ({data.shape} au lieu de {image_shape})."
@@ -82,12 +82,14 @@ def stack_images(
             f"stacked_{object_name}{filter_part}_{safe_exposure}s.fits"
         )
         if debayer:
-            bayer_pattern = header.get("BAYERPAT")
-            if bayer_pattern:
-                stacked_data = debayer_bilinear(stacked_data, bayer_pattern)
+            if stacked_data.ndim == 2:
+                bayer_pattern = header.get("BAYERPAT")
+                if bayer_pattern:
+                    stacked_data = debayer_bilinear(stacked_data, bayer_pattern)
+                    header["DEBAYER"] = "BILINEAR"
+                    header.remove("BAYERPAT", ignore_missing=True)
+            if stacked_data.ndim == 3:
                 stacked_data = balance_rgb_channels(stacked_data)
-                header["DEBAYER"] = "BILINEAR"
-                header.remove("BAYERPAT", ignore_missing=True)
         header["OBJECT"] = f"STACKED_{object_name}{filter_part}"
         header["STACKN"] = len(group_files)
         header["EXPTIME"] = total_exposure

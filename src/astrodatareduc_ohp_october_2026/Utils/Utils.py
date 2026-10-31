@@ -75,7 +75,7 @@ def fits_path(directory, stem):
     return directory / f"{stem}.fits"
 
 def filter_name_from_header(header):
-    """Retourne le nom canonique du filtre stocké dans un en-tête FITS OHP."""
+    """Retourne le nom canonique du filtre stocké dans un header FITS OHP."""
     raw_filter = header.get("FLTRNM")
     if raw_filter is None:
         return None
@@ -177,7 +177,7 @@ def get_stats(file):
     return [file,nx*ny,np.average(data),np.std(data),np.min(data),np.max(data)]
 
 def read_raw_image(fits_file, get_header=0):
-    """Copie les données et l'en-tête avant de fermer le fichier FITS afin que Windows puisse le remplacer ultérieurement."""
+    """Copie les données et l'header avant de fermer le fichier FITS afin que Windows puisse le remplacer ultérieurement."""
     with fits.open(fits_file) as hdulist:
         data = hdulist[0].data.copy()
         header = hdulist[0].header.copy()
@@ -190,7 +190,7 @@ def read_raw_image(fits_file, get_header=0):
     raise ValueError("get_header doit être égal à 0 ou 1")
 
 def read_fits_metadata(fits_file):
-    """Lit une copie de l'en-tête primaire FITS et la forme de l'image sans charger les pixels."""
+    """Lit une copie de l'header primaire FITS et la forme de l'image sans charger les pixels."""
     with fits.open(fits_file, memmap=False) as hdulist:
         data = hdulist[0].data
         header = hdulist[0].header.copy()
@@ -200,7 +200,7 @@ def read_fits_metadata(fits_file):
     return shape, header
 
 def write_fits_image(target_file, image, header):
-    """Écrit une image FITS avec un en-tête donné, en créant les dossiers parents si nécessaire."""
+    """Écrit une image FITS avec un header donné, en créant les dossiers parents si nécessaire."""
     target_path = Path(target_file)
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -301,10 +301,10 @@ def ADU_px_hist_all(files):
     plt.show()
 
 def print_header(file, keywords_list = None, l=0):
-    """Affiche l'en-tête d'un fichier FITS. Si keywords_list est fourni, affiche uniquement les mots-clés spécifiés."""
+    """Affiche l'header d'un fichier FITS. Si keywords_list est fourni, affiche uniquement les mots-clés spécifiés."""
     with fits.open(file) as fits_file:
         header = fits_file[0].header
-        # Affiche tout l'en-tête.
+        # Affiche tout l'header.
         if l == 1:
             print(repr(header))
         else:
@@ -313,7 +313,7 @@ def print_header(file, keywords_list = None, l=0):
                     result = ' '.join(str(header[keyword]).split())
                     print(f'Fichier : {Path(file).name} | {keyword:8s} = {result}')
                 else:
-                    print(f"{keyword:8s} = Introuvable dans l'en-tête")
+                    print(f"{keyword:8s} = Introuvable dans l'header")
 
 ### Code annexe
 def tk_window_folder_selection():

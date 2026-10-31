@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import redirect_stdout
 
-from PySide6.QtCore import QObject, QSettings, QTimer, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,8 +16,9 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
+    QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,7 +28,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
-    QFrame,
     QScrollArea,
     QSlider,
     QSplitter,
@@ -37,8 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from .align_images import align_images
-from .combine_colors import align_channels, combine_channels
-from .combine_colors import detect_channel_candidates
+from .combine_colors import align_channels, combine_channels, detect_channel_candidates
 from .make_masters import make_master_dark, make_master_flat, make_master_offset
 from .reduce_fits import reduce_images
 from .stack_images import stack_images
@@ -460,6 +459,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("AstroDataReduc", "OHP")
         self.thread: QThread | None = None
         self.worker: PipelineWorker | None = None
+        self.final_output_path: Path | None = None
         self.rgb_selected_files: dict[str, Path] = {}
         self.rgb_selection_context: tuple[str, str, str] | None = None
         self.rgb_files_valid = False
@@ -479,7 +479,10 @@ class MainWindow(QMainWindow):
         saved = self.settings.value("folder/parent")
         if saved and Path(str(saved)).is_dir():
             self.fields["parent"].setText(str(saved))
-            self.refresh_derived_paths()
+        saved_output = self.settings.value("folder/final_output")
+        if saved_output:
+            self.final_output_path = Path(str(saved_output))
+        self.refresh_derived_paths()
         self.update_buttons()
 
     def build_ui(self) -> None:
@@ -539,10 +542,16 @@ class MainWindow(QMainWindow):
         output_separator.setFrameShape(QFrame.Shape.HLine)
         output_separator.setFrameShadow(QFrame.Shadow.Sunken)
         folders_layout.addWidget(output_separator)
-        output_title = QLabel("Sortie finale (parent\\recomb_colors)")
+        output_title = QLabel("Sortie finale")
         output_label = QLabel("Non sélectionné")
         output_label.setWordWrap(True)
-        folders_layout.addWidget(output_title)
+        output_button = QPushButton("Choisir…")
+        output_button.clicked.connect(self.choose_final_output_folder)
+        output_row = QHBoxLayout()
+        output_row.addWidget(output_title)
+        output_row.addStretch()
+        output_row.addWidget(output_button)
+        folders_layout.addLayout(output_row)
         folders_layout.addWidget(output_label)
         self.fields["stack_output"] = output_label
         options_layout.addWidget(folders)
@@ -551,13 +560,22 @@ class MainWindow(QMainWindow):
         calibration_layout = QVBoxLayout(calibration)
         self.dark_calibration = QRadioButton("Dark (préféré)")
         self.bias_calibration = QRadioButton("Bias")
+        self.no_calibration = QRadioButton("Aucune correction")
         self.dark_calibration.setChecked(True)
-        self.debayer_after_stack = QCheckBox("Débayeriser après empilement")
+        self.flat_calibration = QCheckBox("Flat")
+        self.flat_calibration.setChecked(True)
+        self.debayer_after_stack = QCheckBox(
+            "Débayerisation Bayer (automatique avant alignement)"
+        )
+        self.debayer_after_stack.setChecked(True)
+        self.debayer_after_stack.setEnabled(False)
         self.sound_on_finish = QCheckBox("Son en fin d'action")
         self.sound_on_finish.setChecked(False)
         calibration_layout.addWidget(QLabel("Correction :"))
         calibration_layout.addWidget(self.dark_calibration)
         calibration_layout.addWidget(self.bias_calibration)
+        calibration_layout.addWidget(self.no_calibration)
+        calibration_layout.addWidget(self.flat_calibration)
         calibration_layout.addWidget(self.debayer_after_stack)
         calibration_layout.addWidget(self.sound_on_finish)
         options_layout.addWidget(calibration)
@@ -936,12 +954,21 @@ class MainWindow(QMainWindow):
         self.rgb_files_status.setText("<br><br>".join(lines))
 
     def choose_parent_folder(self) -> None:
+        previous_output = self.path("stack_output")
         previous = self.settings.value(
             "folder/parent",
             DATADIR_GUI
             )
         path = QFileDialog.getExistingDirectory(self, "Sélectionner un dossier", str(previous))
         if path:
+            if previous_output is not None:
+                self.final_output_path = previous_output
+            else:
+                self.final_output_path = Path(path).parent / "recomb_colors"
+            self.settings.setValue(
+                "folder/final_output",
+                str(self.final_output_path),
+            )
             self.settings.setValue("folder/parent", path)
             self.fields["parent"].setText(path)
             parent = Path(path)
@@ -955,6 +982,20 @@ class MainWindow(QMainWindow):
                     f"Impossible de créer masters/process : {exc}",
                 )
                 return
+            self.refresh_derived_paths()
+            self.update_buttons()
+
+    def choose_final_output_folder(self) -> None:
+        current = self.path("stack_output")
+        previous = current if current is not None else DATADIR_GUI
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Sélectionner le dossier de sortie finale",
+            str(previous),
+        )
+        if path:
+            self.final_output_path = Path(path)
+            self.settings.setValue("folder/final_output", path)
             self.refresh_derived_paths()
             self.update_buttons()
 
@@ -973,7 +1014,7 @@ class MainWindow(QMainWindow):
             path = (
                 None
                 if parent is None
-                else parent.parent / name
+                else self.path("stack_output")
                 if key == "stack_output"
                 else parent / name
             )
@@ -998,7 +1039,7 @@ class MainWindow(QMainWindow):
         if parent is None:
             return None
         if key == "stack_output":
-            return parent.parent / "recomb_colors"
+            return self.final_output_path or parent.parent / "recomb_colors"
         names = {
             "lights": "lights",
             "bias": "biases",
@@ -1015,10 +1056,7 @@ class MainWindow(QMainWindow):
     def update_buttons(self) -> None:
         ready = self.path("lights") is not None and self.path("lights").is_dir()
         self.buttons["masters"].setEnabled(
-            self.path("bias") is not None
-            and self.path("bias").is_dir()
-            and self.path("flats") is not None
-            and self.path("flats").is_dir()
+            self.path("masters") is not None
         )
         self.buttons["reduce"].setEnabled(ready and self.path("masters").is_dir())
         self.buttons["align"].setEnabled(ready)
@@ -1027,10 +1065,7 @@ class MainWindow(QMainWindow):
         )
         self.buttons["full"].setEnabled(
             ready
-            and self.path("bias") is not None
-            and self.path("bias").is_dir()
-            and self.path("flats") is not None
-            and self.path("flats").is_dir()
+            and self.path("masters") is not None
         )
 
     def start(self, operation: str) -> None:
@@ -1074,7 +1109,6 @@ class MainWindow(QMainWindow):
             master_job, masters = self.make_master_job(lights, masters)
             if operation == "masters":
                 return master_job
-            self.fields["masters"].setText(str(masters))
             assert lights is not None
             process = self.path("process")
             output = self.path("stack_output")
@@ -1092,7 +1126,14 @@ class MainWindow(QMainWindow):
                     files,
                     masters,
                     output_dir=process,
-                    calibration="dark" if self.dark_calibration.isChecked() else "bias",
+                    calibration=(
+                        "dark"
+                        if self.dark_calibration.isChecked()
+                        else "bias"
+                        if self.bias_calibration.isChecked()
+                        else None
+                    ),
+                    use_flat=self.flat_calibration.isChecked(),
                 )
                 print("Étape 3/4 : alignement des images")
                 align_images(process, output_dir=process)
@@ -1114,8 +1155,13 @@ class MainWindow(QMainWindow):
                 masters,
                 output_dir=process,
                 calibration=(
-                    "dark" if self.dark_calibration.isChecked() else "bias"
+                    "dark"
+                    if self.dark_calibration.isChecked()
+                    else "bias"
+                    if self.bias_calibration.isChecked()
+                    else None
                 ),
+                use_flat=self.flat_calibration.isChecked(),
             )
         if operation == "align":
             process = self.path("process")
@@ -1137,23 +1183,23 @@ class MainWindow(QMainWindow):
         dark = self.path("dark")
         flats = self.path("flats")
         use_dark = self.dark_calibration.isChecked()
+        use_bias = self.bias_calibration.isChecked()
+        use_flat = self.flat_calibration.isChecked()
         if masters is None:
             raise ValueError("Le dossier des masters n'est pas sélectionné.")
-        if bias is None or flats is None:
-            raise ValueError("Sélectionnez les dossiers bias et flats.")
-        if not bias.is_dir():
+        if use_bias and (bias is None or not bias.is_dir()):
             raise FileNotFoundError(
                 f"Le dossier des bias est requis mais absent : {bias}"
             )
-        if not flats.is_dir():
+        if use_flat and (flats is None or not flats.is_dir()):
             raise FileNotFoundError(
                 f"Le dossier des flats est requis mais absent : {flats}"
             )
-        if not iter_fits_files(bias):
+        if use_bias and not iter_fits_files(bias):
             raise FileNotFoundError(
                 f"Aucun fichier bias FITS trouvé dans {bias}."
             )
-        if not iter_fits_files(flats):
+        if use_flat and not iter_fits_files(flats):
             raise FileNotFoundError(
                 f"Aucun fichier flat FITS trouvé dans {flats}."
             )
@@ -1168,7 +1214,11 @@ class MainWindow(QMainWindow):
                 )
         existing = existing_master_files_by_type(masters)
         decisions: dict[str, bool] = {}
-        master_types = ["bias", "flat"]
+        master_types = []
+        if use_bias:
+            master_types.append("bias")
+        if use_flat:
+            master_types.append("flat")
         if use_dark:
             master_types.append("dark")
         for master_type in master_types:
@@ -1185,18 +1235,18 @@ class MainWindow(QMainWindow):
             else:
                 decisions[master_type] = True
         masters.mkdir(parents=True, exist_ok=True)
-        self.fields["masters"].setText(str(masters))
 
         def create_masters() -> list[str]:
-            if decisions["bias"]:
+            bias_file = None
+            if use_bias and decisions["bias"]:
                 bias_file = make_master_offset(bias, masters)
-            else:
+            elif use_bias:
                 bias_file = fits_path(masters, "master_bias")
-            if decisions["flat"]:
+            if use_flat and decisions["flat"]:
                 make_master_flat(flats, bias_file, masters)
             if use_dark and decisions["dark"]:
                 make_master_dark(dark, masters)
-            return [str(bias_file)]
+            return [] if bias_file is None else [str(bias_file)]
 
         return create_masters, masters
 

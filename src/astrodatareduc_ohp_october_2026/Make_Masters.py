@@ -16,6 +16,8 @@ from .Utils.Utils import (
 
 ### Chargement des offsets
 
+_DEFAULT_MASTER_BIAS = object()
+
 def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
     files = iter_fits_files(offset_dir)
     # Charge tous les offsets et calcule le master bias.
@@ -45,13 +47,17 @@ def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
     print(f'Master bias créé et enregistré dans {master_bias_file}')
     return master_bias_file
 
-def make_master_flat(flat_dir=FLAT_DIR, master_bias_file=None, output_dir=MASTER_DIR):
+def make_master_flat(
+    flat_dir=FLAT_DIR,
+    master_bias_file=_DEFAULT_MASTER_BIAS,
+    output_dir=MASTER_DIR,
+):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    if master_bias_file is None:
+    if master_bias_file is _DEFAULT_MASTER_BIAS:
         master_bias_file = fits_path(output_dir, "master_bias")
-    if not os.path.exists(master_bias_file):
-        raise FileNotFoundError("Fichier master bias introuvable. Créez-le d'abord.")
-    master_bias=read_raw_image(master_bias_file)
+    master_bias = None
+    if master_bias_file is not None and os.path.exists(master_bias_file):
+        master_bias = read_raw_image(master_bias_file)
     master_flat_file = None
 
     flat_dir = Path(flat_dir)
@@ -73,7 +79,7 @@ def make_master_flat(flat_dir=FLAT_DIR, master_bias_file=None, output_dir=MASTER
     ):
         nfiles = len(filter_files)
         data, header_ori = read_raw_image(filter_files[0], get_header=1)
-        if data.shape != master_bias.shape:
+        if master_bias is not None and data.shape != master_bias.shape:
             raise ValueError(f"Les dimensions du flat et du bias diffèrent pour le filtre {filter_name or 'inconnu'}")
         calculation_dtype = np.result_type(data.dtype, np.float32)
         normalized = np.full((nfiles, *data.shape), np.nan, dtype=calculation_dtype)
@@ -82,11 +88,15 @@ def make_master_flat(flat_dir=FLAT_DIR, master_bias_file=None, output_dir=MASTER
             if current.shape != data.shape:
                 raise ValueError(f"Les images flat ont des dimensions incompatibles : {file}")
             current[current >= 65535] = np.nan
-            current -= master_bias
+            if master_bias is not None:
+                current -= master_bias
             current[current <= 0] = np.nan
             level = np.nanmedian(current)
             if not np.isfinite(level) or level <= 0:
-                raise ValueError(f"Le flat ne contient aucun signal valide après soustraction du bias : {file}")
+                raise ValueError(
+                    f"Le flat ne contient aucun signal valide"
+                    f"{' après soustraction du bias' if master_bias is not None else ''} : {file}"
+                )
             normalized[i] = current / level
             print(
                 f"Flat {filter_name or 'général'} en cours : "

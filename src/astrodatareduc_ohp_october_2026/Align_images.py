@@ -5,6 +5,7 @@ import astroalign as aa
 from .Utils.Utils import (
     FITS_SUFFIXES,
     Path,
+    debayer_bilinear,
     image_group_key,
     np,
     processing_workers,
@@ -42,6 +43,106 @@ def read_image(path: Path) -> tuple[np.ndarray, object]:
     return np.asarray(data, dtype=np.float32), header
 
 
+def color_alignment_data(
+    data: np.ndarray,
+    header: object,
+) -> tuple[np.ndarray, object]:
+    """Convertit une mosaïque Bayer en plans RGB avant toute reprojection."""
+    if data.ndim != 2 or not header.get("BAYERPAT"):
+        return data, header
+    rgb = debayer_bilinear(data, str(header["BAYERPAT"]))
+    header = header.copy()
+    header["DEBAYER"] = "BILINEAR"
+    header.remove("BAYERPAT", ignore_missing=True)
+    return rgb, header
+
+
+def register_image(
+    source: np.ndarray,
+    reference: np.ndarray,
+) -> np.ndarray:
+    """Aligne des images 2D ou leurs trois plans RGB avec une transformation commune."""
+    if source.ndim == 2 and reference.ndim == 2:
+        aligned, _ = aa.register(source, reference)
+        return aligned
+    if source.ndim != 3 or reference.ndim != 3:
+        raise ValueError("Les images à aligner doivent avoir la même structure couleur.")
+    source_luminance = np.nanmean(source, axis=0)
+    reference_luminance = np.nanmean(reference, axis=0)
+    transform, _ = aa.find_transform(source_luminance, reference_luminance)
+    return np.stack(
+        [
+            aa.apply_transform(
+                transform,
+                source[index],
+                reference[index],
+            )[0]
+            for index in range(source.shape[0])
+        ],
+        axis=0,
+    )
+
+
+def image_fwhm(data: np.ndarray) -> float:
+    """Estime le FWHM médian des sources stellaires détectées dans une image."""
+    finite_data = np.asarray(data, dtype=np.float32).copy()
+    finite_data[~np.isfinite(finite_data)] = np.nanmedian(finite_data)
+    sources = aa._find_sources(finite_data, detection_sigma=5, min_area=5)
+    if len(sources) == 0:
+        raise ValueError("Aucune source stellaire détectée pour mesurer le FWHM.")
+
+    radius = 8
+    fwhm_values = []
+    for x, y in sources:
+        center_x, center_y = round(x), round(y)
+        if (
+            center_x < radius
+            or center_x >= finite_data.shape[1] - radius
+            or center_y < radius
+            or center_y >= finite_data.shape[0] - radius
+        ):
+            continue
+        cutout = finite_data[
+            center_y - radius:center_y + radius + 1,
+            center_x - radius:center_x + radius + 1,
+        ]
+        background = np.median(
+            np.concatenate((cutout[0], cutout[-1], cutout[1:-1, 0], cutout[1:-1, -1]))
+        )
+        signal = np.maximum(cutout - background, 0)
+        total = signal.sum()
+        if not np.isfinite(total) or total <= 0:
+            continue
+        yy, xx = np.indices(signal.shape, dtype=np.float32)
+        centroid_x = np.sum(xx * signal) / total
+        centroid_y = np.sum(yy * signal) / total
+        sigma_x = np.sqrt(np.sum((xx - centroid_x) ** 2 * signal) / total)
+        sigma_y = np.sqrt(np.sum((yy - centroid_y) ** 2 * signal) / total)
+        fwhm = 2.355 * np.sqrt((sigma_x**2 + sigma_y**2) / 2)
+        if np.isfinite(fwhm) and 0 < fwhm < radius * 2.355:
+            fwhm_values.append(float(fwhm))
+
+    if not fwhm_values:
+        raise ValueError("Aucune source stellaire valide pour mesurer le FWHM.")
+    return float(np.median(fwhm_values))
+
+
+def best_fwhm_reference(group_files: list[Path]) -> Path:
+    """Retourne l'image au FWHM médian le plus faible."""
+    scores = []
+    for path in group_files:
+        data, _ = read_image(path)
+        score = image_fwhm(data)
+        scores.append((score, path))
+        print(f"[Alignement] FWHM de {path.name} : {score:.2f} px")
+    score, reference_path = min(scores, key=lambda item: (item[0], item[1].name))
+    print(
+        f"[Alignement] Référence choisie par FWHM : "
+        f"{reference_path.name} ({score:.2f} px)."
+    )
+    return reference_path
+
+
 def align_images(
     lights_dir: str | Path,
     reference_file: str | Path | None = None,
@@ -50,8 +151,9 @@ def align_images(
 ) -> list[Path]:
     """Aligne chaque image FITS de ``lights_dir`` sur une image de référence.
 
-    La référence est par défaut le premier fichier FITS dans l'ordre alphabétique.
-    Les fichiers alignés reçoivent le suffixe ``_aligned`` et l'en-tête FITS
+    La référence est choisie par le plus petit FWHM médian, sauf si
+    ``reference_file`` est fourni explicitement.
+    Les fichiers alignés reçoivent le suffixe ``_aligned`` et l'header FITS
     original est conservé.
     """
     input_dir = Path(lights_dir)
@@ -79,6 +181,20 @@ def align_images(
 
     destination_dir = Path(output_dir) if output_dir is not None else input_dir
     destination_dir.mkdir(parents=True, exist_ok=True)
+    stale_outputs = [
+        destination_dir / f"{source.stem}{ALIGNED_SUFFIX}{source.suffix}"
+        for source in files
+    ]
+    removed_outputs = 0
+    for output in stale_outputs:
+        if output.exists():
+            output.unlink()
+            removed_outputs += 1
+    if removed_outputs:
+        print(
+            f"[Alignement] {removed_outputs} ancien(s) fichier(s) aligné(s) "
+            "supprimé(s) avant le traitement."
+        )
     print(f"[Alignement] Dossier source : {input_dir}")
     print(f"[Alignement] Dossier de sortie : {destination_dir}")
     print(f"[Alignement] Fichiers détectés : {len(files)}")
@@ -89,7 +205,7 @@ def align_images(
             _, header = read_raw_image(path, get_header=1)
             groups.setdefault(image_group_key(header), []).append(path)
         reference_groups = [
-            (group_files[0], group_files)
+            (best_fwhm_reference(group_files), group_files)
             for group_files in groups.values()
         ]
     else:
@@ -116,11 +232,16 @@ def align_images(
             "[Alignement] La référence est chargée ; astroalign cherchera "
             "les étoiles communes dans chaque autre image."
         )
-        reference_data, _ = read_image(group_reference)
+        reference_data, reference_header = read_image(group_reference)
+        reference_data, _ = color_alignment_data(
+            reference_data,
+            reference_header,
+        )
 
         def align_one(source_path):
             print(f"[Alignement] Lecture de {source_path.name}...")
             source_data, header = read_image(source_path)
+            source_data, header = color_alignment_data(source_data, header)
             if source_path.resolve() == group_reference.resolve():
                 aligned_data = source_data
                 print(
@@ -133,7 +254,7 @@ def align_images(
                         f"[Alignement] Recherche de la transformation "
                         f"{source_path.name} -> {group_reference.name}..."
                     )
-                    aligned_data, _ = aa.register(source_data, reference_data)
+                    aligned_data = register_image(source_data, reference_data)
                     print(
                         f"[Alignement] Transformation trouvée pour "
                         f"{source_path.name}; reprojection terminée."
@@ -190,12 +311,15 @@ def align_selected_images(
         raise FileNotFoundError(f"Fichier FITS introuvable : {missing}")
 
     reference_path = (
-        Path(reference_file) if reference_file is not None else input_files[0]
+        Path(reference_file)
+        if reference_file is not None
+        else best_fwhm_reference(input_files)
     )
     if reference_path.resolve() not in {file.resolve() for file in input_files}:
         raise ValueError("La référence doit faire partie des fichiers à aligner.")
 
-    reference_data, _ = read_image(reference_path)
+    reference_data, reference_header = read_image(reference_path)
+    reference_data, _ = color_alignment_data(reference_data, reference_header)
     print(
         f"[Alignement] Référence : {reference_path.name} "
         f"(dimensions : {reference_data.shape})."
@@ -210,6 +334,7 @@ def align_selected_images(
     for source_path in input_files:
         print(f"[Alignement] Lecture de {source_path.name}...")
         source_data, header = read_image(source_path)
+        source_data, header = color_alignment_data(source_data, header)
         if source_path.resolve() == reference_path.resolve():
             aligned_data = source_data
             print(
@@ -222,7 +347,7 @@ def align_selected_images(
                     f"[Alignement] Astroalign recherche les étoiles communes "
                     f"pour {source_path.name} -> {reference_path.name}..."
                 )
-                aligned_data, _ = aa.register(source_data, reference_data)
+                aligned_data = register_image(source_data, reference_data)
                 print(
                     f"[Alignement] Astroalign a terminé la reprojection de "
                     f"{source_path.name}."

@@ -24,6 +24,10 @@ flats. Les fichiers bruts conservent leur type d'origine.
 
 Les images ne doivent être empilées qu'après regroupement par objet, filtre et temps de pose. Les images saturées et les produits déjà réduits ne sont pas des entrées valides pour la construction des masters.
 
+Lors d'un alignement sans référence imposée, l'image ayant le plus petit FWHM
+médian des sources stellaires détectées est choisie comme référence, car elle
+est la plus nette. Une référence fournie explicitement reste prioritaire.
+
 ## Utilisation
 
 Lancer `astrodatareduc` puis choisir une opération :
@@ -53,9 +57,15 @@ Choisir un dossier parent contenant, selon les besoins :
 - `darks` (optionnel).
 
 L'application crée automatiquement `masters`, `process` et, lors de
-l'empilement, `recomb_colors`. Les fichiers réduits et alignés vont dans
-`process`, tandis que les fichiers empilés `stacked_*.fits` sont écrits dans
-`recomb_colors`.
+l'empilement, `recomb_colors`. Le dossier **Sortie finale** est
+`recomb_colors` par défaut, mais peut être choisi avec le bouton « Choisir… ».
+Les fichiers réduits et alignés vont dans `process`, tandis que les fichiers
+empilés `stacked_*.fits` sont écrits dans le dossier final choisi. Ce choix
+est conservé lorsque le dossier parent contenant les images d'entrée est
+changé.
+Pour les images à matrice de Bayer, le débayering est réalisé avant
+l'alignement afin que l'interpolation d'astroalign ne mélange pas les pixels
+R, G et B de la mosaïque. L'empilement produit alors directement un cube RGB.
 
 L'onglet **Console** affiche l'avancement des opérations. L'onglet **Visionneuse FITS** ouvre les fichiers `.fit` et `.fits`, et affiche le dernier résultat produit.
 
@@ -110,11 +120,20 @@ La réduction et l'alignement utilisent jusqu'à quatre workers CPU. Cette limit
 $env:ASTRODATAREDUC_WORKERS=2
 ```
 
-L'empilement calcule une médiane pixel par pixel et renseigne `TOTEXP`. Le choix Bias/Dark est exclusif et le master sélectionné doit exister. Les masters conservent le `dtype` des fichiers sources.
+L'empilement calcule une médiane pixel par pixel et renseigne `TOTEXP`. Le
+choix Bias/Dark est exclusif et peut être désactivé avec « Aucune correction ».
+Le flat peut également être activé ou désactivé séparément. Les masters
+correspondant aux corrections sélectionnées doivent exister ; une réduction
+sans aucun DOF est donc autorisée.
 
-Le bouton « Créer les masters » produit le master bias et les masters flats. Avec l'option Dark, il produit aussi `master_dark.fits`. Les bias sont requis pour créer les flats ; les darks doivent correspondre aux lights.
+Le bouton « Créer les masters » ne demande que les dossiers nécessaires aux
+corrections choisies. Un flat peut être construit sans master bias. Avec
+l'option Dark, il produit aussi `master_dark.fits`. Les darks doivent
+correspondre aux lights.
 
-Le choix Bias/Dark est exclusif et le master choisi doit exister. Le bouton « Tout le processus » enchaîne la création des masters, la réduction, l'alignement et l'empilement.
+Le choix Bias/Dark est exclusif et le master choisi doit exister lorsqu'une
+correction est activée. Le bouton « Tout le processus » enchaîne la création
+des masters, la réduction, l'alignement et l'empilement.
 
 <!--
 ## Limites scientifiques

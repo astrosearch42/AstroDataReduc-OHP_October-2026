@@ -17,7 +17,7 @@ def main() -> None:
         print("Aucun fichier FITS trouvé dans le dossier sélectionné.")
         return
     file_input = input("Entrez le numéro du fichier FITS à analyser (ou appuyez sur Entrée pour utiliser le premier fichier) : ")
-    show_info = input("Voulez-vous afficher toutes les informations de l'en-tête ? (o/n) : ").strip().lower() in {'o', 'y'}
+    show_info = input("Voulez-vous afficher toutes les informations de l'header ? (o/n) : ").strip().lower() in {'o', 'y'}
     if show_info:
         l = 1
     else:
