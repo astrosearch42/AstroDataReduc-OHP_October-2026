@@ -202,6 +202,27 @@ def read_fits_metadata(fits_file):
         raise ValueError(f"Le fichier FITS ne contient aucune image primaire : {fits_file}")
     return shape, header
 
+def read_fits_chunk(fits_file, row_start, row_end):
+    """Lit un bloc de lignes FITS et le convertit en float32."""
+    try:
+        with fits.open(fits_file, memmap=True) as hdulist:
+            data = hdulist[0].data
+            if data is None:
+                raise ValueError(
+                    f"Le fichier FITS ne contient aucune image primaire : {fits_file}"
+                )
+            return np.asarray(data[row_start:row_end], dtype=np.float32)
+    except ValueError as exc:
+        if "memory-mapped image" not in str(exc):
+            raise
+        with fits.open(fits_file, memmap=False) as hdulist:
+            data = hdulist[0].data
+            if data is None:
+                raise ValueError(
+                    f"Le fichier FITS ne contient aucune image primaire : {fits_file}"
+                )
+            return np.asarray(data[row_start:row_end], dtype=np.float32)
+
 def write_fits_image(target_file, image, header):
     """Écrit une image FITS avec un header donné, en créant les dossiers parents si nécessaire."""
     target_path = Path(target_file)

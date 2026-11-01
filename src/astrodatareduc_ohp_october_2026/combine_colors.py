@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from .align_images import align_selected_images
+from .align_images import align_selected_images, align_selected_images_basic
 from .Utils.Utils import (
     FITS_SUFFIXES,
     FLTRNM_OHP,
@@ -333,6 +333,7 @@ def align_channels(
     filter_keyword: str = "FLTRNM",
     mode: str = "RGB",
     selected_files: dict[str, Path] | None = None,
+    basic: bool = False,
 ) -> Path:
     """Aligne les fichiers sélectionnés et conserve les résultats temporaires."""
     channels = resolve_channel_files(
@@ -351,11 +352,8 @@ def align_channels(
         f"[Alignement RGB] Les images seront alignées sur le canal R "
         f"dans {aligned_dir}."
     )
-    align_selected_images(
-        source_paths,
-        aligned_dir,
-        reference_file=channels["R"][0],
-    )
+    aligner = align_selected_images_basic if basic else align_selected_images
+    aligner(source_paths, aligned_dir, reference_file=channels["R"][0])
     print("[Alignement RGB] Étape d'alignement terminée.")
     return aligned_dir
 

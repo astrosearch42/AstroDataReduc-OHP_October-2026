@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .align_images import align_images
+from .align_images import align_images, align_images_basic
 from .combine_colors import align_channels, combine_channels, detect_channel_candidates
 from .make_masters import make_master_dark, make_master_flat, make_master_offset
 from .reduce_fits import reduce_images
@@ -461,6 +461,7 @@ class MainWindow(QMainWindow):
         self.thread: QThread | None = None
         self.worker: PipelineWorker | None = None
         self.final_output_path: Path | None = None
+        self.keep_output_path = False
         self.rgb_selected_files: dict[str, Path] = {}
         self.rgb_selection_context: tuple[str, str, str] | None = None
         self.rgb_files_valid = False
@@ -490,7 +491,11 @@ class MainWindow(QMainWindow):
         if saved and Path(str(saved)).is_dir():
             self.fields["parent"].setText(str(saved))
         saved_output = self.settings.value("folder/final_output")
-        if saved_output:
+        saved_keep_output = self.settings.value("folder/keep_output", False)
+        self.keep_output_checkbox.setChecked(
+            str(saved_keep_output).lower() in {"1", "true", "yes"}
+        )
+        if saved_output and self.keep_output_checkbox.isChecked():
             self.final_output_path = Path(str(saved_output))
         self.refresh_derived_paths()
         self.update_buttons()
@@ -561,6 +566,11 @@ class MainWindow(QMainWindow):
         output_row.addWidget(output_title)
         output_row.addStretch()
         output_row.addWidget(output_button)
+        self.keep_output_checkbox = QCheckBox(
+            "Garder le même dossier de sortie"
+        )
+        self.keep_output_checkbox.toggled.connect(self.toggle_keep_output_path)
+        output_row.addWidget(self.keep_output_checkbox)
         folders_layout.addLayout(output_row)
         folders_layout.addWidget(output_label)
         self.fields["stack_output"] = output_label
@@ -596,7 +606,6 @@ class MainWindow(QMainWindow):
         for key, title in (
             ("masters", "Créer les masters"),
             ("reduce", "Réduire"),
-            ("align", "Aligner"),
             ("stack", "Stacker"),
             ("full", "Tout le processus"),
         ):
@@ -604,6 +613,16 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda checked=False, k=key: self.start(k))
             actions_layout.addWidget(button)
             self.buttons[key] = button
+        alignment_row = QHBoxLayout()
+        self.buttons["align"] = QPushButton("Aligner")
+        self.buttons["align"].clicked.connect(lambda: self.start("align"))
+        self.buttons["align_basic"] = QPushButton("Alignement basique")
+        self.buttons["align_basic"].clicked.connect(
+            lambda: self.start("align_basic")
+        )
+        alignment_row.addWidget(self.buttons["align"])
+        alignment_row.addWidget(self.buttons["align_basic"])
+        actions_layout.insertLayout(2, alignment_row)
         options_layout.addWidget(actions)
 
         self.progress = QProgressBar()
@@ -715,10 +734,18 @@ class MainWindow(QMainWindow):
         self.rgb_files_status.setWordWrap(True)
         layout.addWidget(self.rgb_files_status)
 
+        alignment_row = QHBoxLayout()
         self.align_button = QPushButton("Aligner les images")
         self.align_button.clicked.connect(self.start_rgb_alignment)
         self.align_button.setEnabled(False)
-        layout.addWidget(self.align_button)
+        self.rgb_basic_align_button = QPushButton("Alignement basique")
+        self.rgb_basic_align_button.clicked.connect(
+            lambda: self.start_rgb_alignment(basic=True)
+        )
+        self.rgb_basic_align_button.setEnabled(False)
+        alignment_row.addWidget(self.align_button)
+        alignment_row.addWidget(self.rgb_basic_align_button)
+        layout.addLayout(alignment_row)
 
         self.combine_button = QPushButton("Recombiner les canaux")
         self.combine_button.clicked.connect(self.start_rgb_combination)
@@ -753,6 +780,7 @@ class MainWindow(QMainWindow):
         if self.thread is None and hasattr(self, "combine_button"):
             self.combine_button.setEnabled(False)
             self.align_button.setEnabled(False)
+            self.rgb_basic_align_button.setEnabled(False)
 
     def start_rgb_combination(self) -> None:
         if (
@@ -827,7 +855,7 @@ class MainWindow(QMainWindow):
         self.rgb_recombination_pending = True
         self.rgb_recombination_timer.start()
 
-    def start_rgb_alignment(self) -> None:
+    def start_rgb_alignment(self, basic: bool = False) -> None:
         if self.thread is not None or not self.rgb_files_valid:
             return
         directory = Path(self.rgb_folder.text().strip())
@@ -835,12 +863,13 @@ class MainWindow(QMainWindow):
         mode = self.rgb_mode.currentText()
         selected_files = self.rgb_selected_files
         self.start_operation(
-            f"align_{mode.lower()}",
+            f"rgb_align_{'basic_' if basic else ''}{mode.lower()}",
             lambda: [align_channels(
                 directory,
                 filter_keyword=keyword,
                 mode=mode,
                 selected_files=selected_files,
+                basic=basic,
             )],
         )
 
@@ -971,13 +1000,15 @@ class MainWindow(QMainWindow):
             )
         path = QFileDialog.getExistingDirectory(self, "Sélectionner un dossier", str(previous))
         if path:
-            if previous_output is not None:
+            if not self.keep_output_checkbox.isChecked():
+                self.final_output_path = Path(path)
+            elif previous_output is not None:
                 self.final_output_path = previous_output
-            else:
-                self.final_output_path = Path(path).parent / "recomb_colors"
             self.settings.setValue(
                 "folder/final_output",
-                str(self.final_output_path),
+                str(self.final_output_path)
+                if self.final_output_path is not None
+                else "",
             )
             self.settings.setValue("folder/parent", path)
             self.fields["parent"].setText(path)
@@ -1005,7 +1036,19 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.final_output_path = Path(path)
+            self.keep_output_checkbox.setChecked(True)
             self.settings.setValue("folder/final_output", path)
+            self.refresh_derived_paths()
+            self.update_buttons()
+
+    def toggle_keep_output_path(self, keep: bool) -> None:
+        self.keep_output_path = keep
+        self.settings.setValue("folder/keep_output", keep)
+        if not keep:
+            parent = self.path("parent")
+            self.final_output_path = parent
+            if parent is not None:
+                self.settings.setValue("folder/final_output", str(parent))
             self.refresh_derived_paths()
             self.update_buttons()
 
@@ -1049,7 +1092,7 @@ class MainWindow(QMainWindow):
         if parent is None:
             return None
         if key == "stack_output":
-            return self.final_output_path or parent.parent / "recomb_colors"
+            return self.final_output_path or parent
         names = {
             "lights": "lights",
             "bias": "biases",
@@ -1070,6 +1113,7 @@ class MainWindow(QMainWindow):
         )
         self.buttons["reduce"].setEnabled(ready and self.path("masters").is_dir())
         self.buttons["align"].setEnabled(ready)
+        self.buttons["align_basic"].setEnabled(ready)
         self.buttons["stack"].setEnabled(
             ready and self.path("process").is_dir()
         )
@@ -1116,6 +1160,32 @@ class MainWindow(QMainWindow):
         ):
             raise ValueError("Sélectionnez les dossiers lights et masters.")
         if operation in {"masters", "full"}:
+            aligner = align_images
+            if operation == "full":
+                alignment_choice = QMessageBox(self)
+                alignment_choice.setWindowTitle("Méthode d'alignement")
+                alignment_choice.setText(
+                    "Choisissez la méthode d'alignement pour le processus complet."
+                )
+                advanced_button = alignment_choice.addButton(
+                    "Alignement actuel",
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                basic_button = alignment_choice.addButton(
+                    "Alignement basique",
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
+                alignment_choice.addButton(
+                    QMessageBox.StandardButton.Cancel
+                )
+                alignment_choice.exec()
+                clicked_button = alignment_choice.clickedButton()
+                if clicked_button is None:
+                    return None
+                if clicked_button is basic_button:
+                    aligner = align_images_basic
+                elif clicked_button is not advanced_button:
+                    return None
             master_job, masters = self.make_master_job(lights, masters)
             if operation == "masters":
                 return master_job
@@ -1146,7 +1216,7 @@ class MainWindow(QMainWindow):
                     use_flat=self.flat_calibration.isChecked(),
                 )
                 print("Étape 3/4 : alignement des images")
-                align_images(process, output_dir=process)
+                aligner(process, output_dir=process)
                 print("Étape 4/4 : stacking")
                 return stack_images(
                     process,
@@ -1173,10 +1243,11 @@ class MainWindow(QMainWindow):
                 ),
                 use_flat=self.flat_calibration.isChecked(),
             )
-        if operation == "align":
+        if operation in {"align", "align_basic"}:
             process = self.path("process")
             assert process is not None
-            return lambda: align_images(process, output_dir=process)
+            aligner = align_images_basic if operation == "align_basic" else align_images
+            return lambda: aligner(process, output_dir=process)
         process = self.path("process")
         output = self.path("stack_output")
         assert process is not None and output is not None
@@ -1265,11 +1336,12 @@ class MainWindow(QMainWindow):
             button.setEnabled(not busy)
         self.detect_button.setEnabled(not busy)
         self.align_button.setEnabled(not busy and self.rgb_files_valid)
+        self.rgb_basic_align_button.setEnabled(not busy and self.rgb_files_valid)
         self.combine_button.setEnabled(not busy and self.rgb_aligned_valid)
 
     @Slot(object)
     def operation_finished(self, result: object) -> None:
-        if self.current_operation.startswith("align_"):
+        if self.current_operation.startswith("rgb_align_"):
             self.rgb_aligned_valid = True
             self.rgb_alignment_context = (
                 str(Path(self.rgb_folder.text().strip()).resolve()),
@@ -1290,7 +1362,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def operation_failed(self, message: str) -> None:
-        if self.current_operation.startswith("align_"):
+        if self.current_operation.startswith("rgb_align_"):
             self.rgb_aligned_valid = False
             self.rgb_alignment_context = None
         self.progress.setRange(0, 100)

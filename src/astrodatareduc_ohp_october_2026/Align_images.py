@@ -297,6 +297,30 @@ def align_images(
     return aligned_files
 
 
+def align_images_basic(
+    lights_dir: str | Path,
+    output_dir: str | Path | None = None,
+) -> list[Path]:
+    """Aligne toutes les images sur le premier fichier avec ``astroalign.register``."""
+    input_dir = Path(lights_dir)
+    if not input_dir.is_dir():
+        raise NotADirectoryError(f"Dossier lights introuvable : {input_dir}")
+
+    files = fits_files(input_dir)
+    if not files:
+        print(
+            "Aucun fichier FITS réduit (*_reduced*.fit ou *.fits) trouvé. "
+            "Il faut réduire les données avant de les aligner."
+        )
+        return []
+
+    return align_selected_images_basic(
+        files,
+        output_dir if output_dir is not None else input_dir,
+        reference_file=files[0],
+    )
+
+
 def align_selected_images(
     files: list[str | Path],
     output_dir: str | Path,
@@ -318,7 +342,7 @@ def align_selected_images(
     if reference_path.resolve() not in {file.resolve() for file in input_files}:
         raise ValueError("La référence doit faire partie des fichiers à aligner.")
 
-    reference_data, reference_header = read_image(reference_path)
+    reference_data, _ = read_image(reference_path)
     reference_data, _ = color_alignment_data(reference_data, reference_header)
     print(
         f"[Alignement] Référence : {reference_path.name} "
@@ -370,6 +394,58 @@ def align_selected_images(
         print(f"[Alignement] Fichier écrit : {destination.name}")
         aligned_files.append(destination)
     print(f"Alignement terminé : {len(aligned_files)} image(s) produite(s).")
+    return aligned_files
+
+
+def align_selected_images_basic(
+    files: list[str | Path],
+    output_dir: str | Path,
+    reference_file: str | Path,
+) -> list[Path]:
+    """Aligne des images 2D avec l'ancienne méthode directe d'Astroalign."""
+    input_files = [Path(file) for file in files]
+    if not input_files:
+        raise ValueError("Aucun fichier FITS à aligner.")
+    if any(not file.is_file() for file in input_files):
+        missing = next(file for file in input_files if not file.is_file())
+        raise FileNotFoundError(f"Fichier FITS introuvable : {missing}")
+
+    reference_path = Path(reference_file)
+    if reference_path.resolve() not in {file.resolve() for file in input_files}:
+        raise ValueError("La référence doit faire partie des fichiers à aligner.")
+    reference_data, reference_header = read_image(reference_path)
+    if reference_data.ndim != 2:
+        raise ValueError("L'ancienne méthode nécessite des images FITS 2D.")
+
+    destination_dir = Path(output_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    aligned_files: list[Path] = []
+    print(
+        f"[Alignement basique] Référence : {reference_path.name} "
+        f"(dimensions : {reference_data.shape})."
+    )
+    for source_path in input_files:
+        source_data, header = read_image(source_path)
+        if source_path.resolve() == reference_path.resolve():
+            aligned_data = source_data
+        else:
+            print(
+                f"[Alignement basique] Astroalign register : "
+                f"{source_path.name} -> {reference_path.name}..."
+            )
+            aligned_data, _ = aa.register(source_data, reference_data)
+
+        destination = destination_dir / (
+            f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"
+        )
+        header["ALIGNREF"] = reference_path.name
+        write_fits_image(destination, aligned_data, header)
+        print(f"[Alignement basique] Fichier écrit : {destination.name}")
+        aligned_files.append(destination)
+
+    print(
+        f"Alignement basique terminé : {len(aligned_files)} image(s) produite(s)."
+    )
     return aligned_files
 
 

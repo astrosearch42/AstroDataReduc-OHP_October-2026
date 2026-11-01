@@ -5,7 +5,8 @@ from .Utils.Utils import (
     debayer_bilinear,
     image_group_key,
     np,
-    read_raw_image,
+    read_fits_chunk,
+    read_fits_metadata,
     tk_window_folder_selection,
     write_fits_image,
 )
@@ -48,7 +49,7 @@ def stack_images(
 
     groups = {}
     for file in files:
-        _, header = read_raw_image(file, get_header=1)
+        _, header = read_fits_metadata(file)
         groups.setdefault(image_group_key(header), []).append(file)
 
     output_files = []
@@ -57,23 +58,42 @@ def stack_images(
             f"Les calculs en cours : stacking médian de "
             f"{len(group_files)} image(s) pour le groupe {group}."
         )
-        first_data, header = read_raw_image(group_files[0], get_header=1)
-        if first_data.ndim not in {2, 3}:
+        image_shape, header = read_fits_metadata(group_files[0])
+        if len(image_shape) not in {2, 3}:
             raise ValueError(f"Image FITS invalide : {group_files[0]}")
-        image_shape = first_data.shape
-        data_stack = np.empty((len(group_files), *image_shape), dtype=np.float32)
-        data_stack[0] = np.asarray(first_data, dtype=np.float32)
-        for index, file in enumerate(group_files[1:], start=1):
-            data = read_raw_image(file)
-            if data.ndim != first_data.ndim or data.shape != image_shape:
+        for file in group_files[1:]:
+            shape, _ = read_fits_metadata(file)
+            if shape != image_shape:
                 raise ValueError(
                     f"Les images doivent avoir la même forme 2D : "
-                    f"{file} ({data.shape} au lieu de {image_shape})."
+                    f"{file} ({shape} au lieu de {image_shape})."
                 )
-            data_stack[index] = np.asarray(data, dtype=np.float32)
 
-        with np.errstate(invalid="ignore"):
-            stacked_data = np.nanmedian(data_stack, axis=0)
+        stacked_data = np.empty(image_shape, dtype=np.float32)
+        pixels_per_row = int(np.prod(image_shape[1:]))
+        target_chunk_bytes = 128 * 1024 * 1024
+        chunk_rows = max(
+            1,
+            target_chunk_bytes
+            // (
+                len(group_files)
+                * pixels_per_row
+                * np.dtype(np.float32).itemsize
+            ),
+        )
+        for row_start in range(0, image_shape[0], chunk_rows):
+            row_end = min(row_start + chunk_rows, image_shape[0])
+            data_chunk = np.empty(
+                (len(group_files), row_end - row_start, *image_shape[1:]),
+                dtype=np.float32,
+            )
+            for index, file in enumerate(group_files):
+                data_chunk[index] = read_fits_chunk(file, row_start, row_end)
+            with np.errstate(invalid="ignore"):
+                stacked_data[row_start:row_end] = np.nanmedian(
+                    data_chunk,
+                    axis=0,
+                )
         object_name, filter_name, exposure = group
         total_exposure = float(exposure or 0) * len(group_files)
         safe_exposure = str(total_exposure).replace(".", "p")
