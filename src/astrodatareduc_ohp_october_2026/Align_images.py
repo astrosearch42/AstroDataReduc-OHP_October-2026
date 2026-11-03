@@ -16,6 +16,7 @@ from .Utils.Utils import (
 
 ALIGNED_SUFFIX = "_aligned"
 REDUCED_MARKER = "_reduced"
+DETECTION_SIGMAS = (5, 4, 3, 2)
 
 
 def fits_files(directory: Path) -> list[Path]:
@@ -63,13 +64,35 @@ def register_image(
 ) -> np.ndarray:
     """Aligne des images 2D ou leurs trois plans RGB avec une transformation commune."""
     if source.ndim == 2 and reference.ndim == 2:
-        aligned, _ = aa.register(source, reference)
-        return aligned
+        last_error = None
+        for detection_sigma in DETECTION_SIGMAS:
+            try:
+                aligned, _ = aa.register(
+                    source,
+                    reference,
+                    detection_sigma=detection_sigma,
+                )
+                return aligned
+            except (aa.MaxIterError, ValueError) as exc:
+                last_error = exc
+        raise last_error
     if source.ndim != 3 or reference.ndim != 3:
         raise ValueError("Les images à aligner doivent avoir la même structure couleur.")
     source_luminance = np.nanmean(source, axis=0)
     reference_luminance = np.nanmean(reference, axis=0)
-    transform, _ = aa.find_transform(source_luminance, reference_luminance)
+    last_error = None
+    for detection_sigma in DETECTION_SIGMAS:
+        try:
+            transform, _ = aa.find_transform(
+                source_luminance,
+                reference_luminance,
+                detection_sigma=detection_sigma,
+            )
+            break
+        except (aa.MaxIterError, ValueError) as exc:
+            last_error = exc
+    else:
+        raise last_error
     return np.stack(
         [
             aa.apply_transform(
@@ -342,7 +365,7 @@ def align_selected_images(
     if reference_path.resolve() not in {file.resolve() for file in input_files}:
         raise ValueError("La référence doit faire partie des fichiers à aligner.")
 
-    reference_data, _ = read_image(reference_path)
+    reference_data, reference_header = read_image(reference_path)
     reference_data, _ = color_alignment_data(reference_data, reference_header)
     print(
         f"[Alignement] Référence : {reference_path.name} "
@@ -433,7 +456,7 @@ def align_selected_images_basic(
                 f"[Alignement basique] Astroalign register : "
                 f"{source_path.name} -> {reference_path.name}..."
             )
-            aligned_data, _ = aa.register(source_data, reference_data)
+            aligned_data = register_image(source_data, reference_data)
 
         destination = destination_dir / (
             f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"

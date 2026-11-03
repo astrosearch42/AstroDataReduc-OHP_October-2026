@@ -675,7 +675,7 @@ class MainWindow(QMainWindow):
         folder_row.addWidget(choose_button)
         form.addRow("Dossier des canaux", folder_row)
 
-        self.rgb_filter_keyword = QLineEdit("FLTRNM")
+        self.rgb_filter_keyword = QLineEdit("FILTER")
         self.rgb_filter_keyword.textChanged.connect(self.invalidate_rgb_detection)
         self.rgb_filter_keyword.setToolTip(
             "Clé FITS contenant le nom du filtre, par exemple FLTRNM ou FLTR."

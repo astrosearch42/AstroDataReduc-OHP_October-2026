@@ -43,7 +43,7 @@ def _narrowband_from_filter(raw_filter: object) -> str | None:
 
 def detect_channel_files(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
     mode: str = "RGB",
 ) -> dict[str, tuple[Path, str]]:
     """Trouve les fichiers et filtres requis par une recombinaison."""
@@ -91,7 +91,7 @@ def _required_filters(mode: str) -> dict[str, str]:
 
 def detect_channel_candidates(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
     mode: str = "RGB",
 ) -> dict[str, list[tuple[Path, str, fits.Header]]]:
     """Retourne tous les fichiers candidats, y compris les doublons."""
@@ -133,7 +133,7 @@ def detect_channel_candidates(
 
 def find_rgb_files(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
 ) -> dict[str, Path]:
     """Compatibilité : trouve les fichiers des trois canaux RGB."""
     return {
@@ -144,7 +144,7 @@ def find_rgb_files(
 
 def combine_channels(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
     mode: str = "RGB",
     narrowband_coefficients: dict[str, float] | None = None,
     selected_files: dict[str, Path] | None = None,

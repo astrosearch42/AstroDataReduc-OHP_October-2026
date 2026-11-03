@@ -22,11 +22,11 @@ DATADIR_GUI = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'
 
 ### Dictionnaires utiles à modifier si nécessaire
 FLTRNM_OHP = {
-    'R Cousins': 'R',
-    'V Cousins': 'V',
-    'B Cousins': 'B',
-    'H Alpha ohp 6565': 'Ha',
-    'O3 ohp 5007': 'O3',
+    'R Cousin': 'R',
+    'V Cousin': 'V',
+    'B Cousin': 'B',
+    'Ha Baader': 'Ha',
+    'OIII Baader': 'O3',
 }
 FITS_SUFFIXES = (".fit", ".fits")
 
