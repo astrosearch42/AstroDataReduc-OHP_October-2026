@@ -171,10 +171,14 @@ uv run pyinstaller `
   --clean `
   --paths src `
   --collect-all PySide6 `
-  src\astrodatareduc_ohp_october_2026\gui.py
+  run_gui.py
 ```
 
 L'executable se trouvera dans le dossier `\dist\AstroDataReduc\`.
+Les données FITS ne sont pas intégrées dans l'exécutable. Pour utiliser les
+chemins par défaut du mode non graphique, placez le dossier `data` à côté de
+`AstroDataReduc.exe`; dans l'interface graphique, un autre dossier peut être
+sélectionné directement.
 
 ## Stockage des fichiers FITS
 

@@ -4,6 +4,7 @@ from .Utils.Utils import (
     OFFSET_DIR,
     Path,
     existing_master_files_by_type,
+    exposure_token,
     filter_name_from_header,
     fits_path,
     iter_fits_files,
@@ -35,9 +36,10 @@ def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
         print(f"Bias en cours : {i + 1}/{nfiles}")
     result = np.median(datastore, axis=0)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    master_bias_file=os.path.join(str(output_dir), 'master_bias.fits')
     header = header_ori
     header['OBJECT'] = 'MASTER_BIAS'
+    exposure = exposure_token(header_ori)
+    master_bias_file=os.path.join(str(output_dir), f'master_bias_{exposure}.fits')
     for keyword in ('FLTRNM', 'TM-EXPOS', 'EXPTIME'):
         header.remove(keyword, ignore_missing=True)
     header['CALIBRAT'] = 'BIAS'
@@ -104,7 +106,9 @@ def make_master_flat(
             )
         result = np.nanmedian(normalized, axis=0)
         result /= np.nanmedian(result)
+        exposure = exposure_token(header_ori)
         master_stem = "master_flat" if filter_name is None else f"master_flat_{filter_name}"
+        master_stem = f"{master_stem}_{exposure}"
         master_flat_file = os.path.join(str(output_dir), f"{master_stem}.fits")
         header=header_ori
         header['OBJECT']='MASTER_FLAT'
@@ -137,7 +141,7 @@ def make_master_dark(dark_dir, output_dir=MASTER_DIR):
         print(f"Dark en cours : {index + 1}/{len(files)}")
     result = np.median(stack, axis=0)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    output = Path(output_dir) / "master_dark.fits"
+    output = Path(output_dir) / f"master_dark_{exposure_token(header)}.fits"
     header["OBJECT"] = "MASTER_DARK"
     header["CALIBRAT"] = "BIAS+DARK"
     header["COMBINE"] = "MEDIAN"

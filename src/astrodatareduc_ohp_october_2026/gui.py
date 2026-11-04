@@ -462,6 +462,7 @@ class MainWindow(QMainWindow):
         self.worker: PipelineWorker | None = None
         self.final_output_path: Path | None = None
         self.keep_output_path = False
+        self.master_keep_output = True
         self.rgb_selected_files: dict[str, Path] = {}
         self.rgb_selection_context: tuple[str, str, str] | None = None
         self.rgb_files_valid = False
@@ -654,6 +655,8 @@ class MainWindow(QMainWindow):
         self.rgb_tab = self.build_rgb_tab()
         self.left_tabs = QTabWidget()
         self.left_tabs.addTab(options_scroll, "Réduction")
+        self.master_tab = self.build_master_tab()
+        self.left_tabs.addTab(self.master_tab, "Créer des masters")
         self.left_tabs.addTab(self.rgb_tab, "Recombinaison RGB")
 
         self.log = QPlainTextEdit()
@@ -671,6 +674,153 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([470, 690])
         layout.addWidget(splitter)
+
+    def build_master_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        form = QFormLayout()
+
+        self.master_type = QComboBox()
+        self.master_type.addItem("Master bias / offset", "bias")
+        self.master_type.addItem("Master dark", "dark")
+        self.master_type.addItem("Master flat", "flat")
+        self.master_type.currentIndexChanged.connect(
+            self.update_master_creator_controls
+        )
+        form.addRow("Type de master", self.master_type)
+
+        input_row = QHBoxLayout()
+        self.master_input = QLineEdit()
+        self.master_input.setPlaceholderText("Dossier contenant les fichiers FITS")
+        self.master_input.textChanged.connect(self.master_input_changed)
+        input_button = QPushButton("Choisir…")
+        input_button.clicked.connect(self.choose_master_input)
+        input_row.addWidget(self.master_input, 1)
+        input_row.addWidget(input_button)
+        form.addRow("Dossier des DOF", input_row)
+
+        output_row = QHBoxLayout()
+        self.master_output = QLineEdit()
+        self.master_output.setPlaceholderText("Dossier de sortie")
+        output_button = QPushButton("Choisir…")
+        output_button.clicked.connect(self.choose_master_output)
+        output_row.addWidget(self.master_output, 1)
+        output_row.addWidget(output_button)
+        self.master_output_button = output_button
+        form.addRow("Dossier de sortie", output_row)
+
+        self.master_keep_checkbox = QCheckBox(
+            "Garder le même dossier de sortie que l'entrée"
+        )
+        self.master_keep_checkbox.setChecked(True)
+        self.master_keep_checkbox.toggled.connect(self.toggle_master_output)
+        form.addRow("", self.master_keep_checkbox)
+
+        calibration_row = QHBoxLayout()
+        self.master_calibration = QLineEdit()
+        self.master_calibration.setPlaceholderText(
+            "Master bias ou master dark existant"
+        )
+        calibration_button = QPushButton("Choisir…")
+        calibration_button.clicked.connect(self.choose_master_calibration)
+        calibration_row.addWidget(self.master_calibration, 1)
+        calibration_row.addWidget(calibration_button)
+        self.master_calibration_button = calibration_button
+        self.master_calibration_row = calibration_row
+        form.addRow("Calibration du flat", calibration_row)
+
+        layout.addLayout(form)
+        self.master_status = QLabel(
+            "Les fichiers produits incluront le temps d'exposition détecté "
+            "dans leur header FITS."
+        )
+        self.master_status.setWordWrap(True)
+        layout.addWidget(self.master_status)
+        self.master_create_button = QPushButton("Créer le master")
+        self.master_create_button.clicked.connect(self.start_master_creator)
+        layout.addWidget(self.master_create_button)
+        layout.addStretch()
+        self.update_master_creator_controls()
+        return tab
+
+    def update_master_creator_controls(self) -> None:
+        is_flat = self.master_type.currentData() == "flat"
+        self.master_calibration.setEnabled(is_flat)
+        self.master_calibration_button.setEnabled(is_flat)
+
+    def choose_master_input(self) -> None:
+        previous = self.master_input.text() or DATADIR_GUI
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier des DOF", previous
+        )
+        if path:
+            self.master_input.setText(path)
+
+    def choose_master_output(self) -> None:
+        previous = self.master_output.text() or self.master_input.text() or DATADIR_GUI
+        path = QFileDialog.getExistingDirectory(
+            self, "Sélectionner le dossier de sortie des masters", previous
+        )
+        if path:
+            self.master_keep_checkbox.setChecked(False)
+            self.master_output.setText(path)
+
+    def choose_master_calibration(self) -> None:
+        previous = self.master_calibration.text() or DATADIR_GUI
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner le master bias ou dark",
+            previous,
+            "FITS (*.fits *.fit)",
+        )
+        if path:
+            self.master_calibration.setText(path)
+
+    def master_input_changed(self, path: str) -> None:
+        if self.master_keep_checkbox.isChecked():
+            self.master_output.setText(path)
+
+    def toggle_master_output(self, keep: bool) -> None:
+        self.master_keep_output = keep
+        self.master_output_button.setEnabled(not keep)
+        if keep:
+            self.master_output.setText(self.master_input.text())
+
+    def start_master_creator(self) -> None:
+        if self.thread is not None:
+            return
+        master_type = str(self.master_type.currentData())
+        input_dir = Path(self.master_input.text().strip())
+        output_dir = Path(self.master_output.text().strip())
+        calibration = Path(self.master_calibration.text().strip())
+        if not input_dir.is_dir():
+            QMessageBox.warning(self, "Configuration invalide",
+                                f"Le dossier d'entrée est introuvable : {input_dir}")
+            return
+        if not self.master_output.text().strip():
+            QMessageBox.warning(self, "Configuration invalide",
+                                "Sélectionnez un dossier de sortie.")
+            return
+        if master_type == "flat" and (
+            not self.master_calibration.text().strip()
+            or not calibration.is_file()
+        ):
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                "Un master bias ou un master dark existant est requis pour un flat.",
+            )
+            return
+
+        def create_master() -> list[str]:
+            if master_type == "bias":
+                result = make_master_offset(input_dir, output_dir)
+            elif master_type == "dark":
+                result = make_master_dark(input_dir, output_dir)
+            else:
+                result = make_master_flat(input_dir, calibration, output_dir)
+            return [str(result)] if result is not None else []
+
+        self.start_operation(f"master_{master_type}", create_master)
 
     def build_rgb_tab(self) -> QWidget:
         tab = QWidget()
@@ -1379,6 +1529,7 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy: bool) -> None:
         for button in self.buttons.values():
             button.setEnabled(not busy)
+        self.master_create_button.setEnabled(not busy)
         self.detect_button.setEnabled(not busy)
         self.align_button.setEnabled(not busy and self.rgb_files_valid)
         self.rgb_basic_align_button.setEnabled(not busy and self.rgb_files_valid)

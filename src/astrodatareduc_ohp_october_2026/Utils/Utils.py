@@ -12,13 +12,18 @@ lazy from matplotlib.colors import LogNorm
 version_app = "1.0.0"
 
 ### Chemins utiles pour l'utilisation du code en mode non gui
-OFFSET_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'offsets'))
-FLAT_DIR   = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'flats'))
-ALL_FLAT_DIR = os.listdir(FLAT_DIR)
-MASTER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'photo', 'masters'))
+if getattr(sys, "frozen", False):
+    PROJECT_DIR = Path(sys.executable).resolve().parent
+else:
+    PROJECT_DIR = Path(__file__).resolve().parents[3]
+DATA_DIR = PROJECT_DIR / "data"
+OFFSET_DIR = str(DATA_DIR / "photo" / "offsets")
+FLAT_DIR = str(DATA_DIR / "photo" / "flats")
+ALL_FLAT_DIR = os.listdir(FLAT_DIR) if os.path.isdir(FLAT_DIR) else []
+MASTER_DIR = str(DATA_DIR / "photo" / "masters")
 
 ### Chemins utiles pour l'utilisation du code en mode gui
-DATADIR_GUI = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'OBJ'))
+DATADIR_GUI = str(DATA_DIR / "OBJ")
 
 ### Dictionnaires utiles à modifier si nécessaire
 FLTRNM_OHP = {
@@ -75,7 +80,31 @@ def fits_path(directory, stem):
         candidate = directory / f"{stem}{suffix}"
         if candidate.exists():
             return candidate
+    with_exposure = sorted(
+        candidate
+        for candidate in directory.glob(f"{stem}_*")
+        if candidate.is_file() and candidate.suffix.lower() in FITS_SUFFIXES
+    )
+    if with_exposure:
+        return with_exposure[0]
     return directory / f"{stem}.fits"
+
+def exposure_token(header):
+    """Retourne une durée d'exposition sûre pour un nom de fichier."""
+    value = header.get("TM-EXPOS", header.get("EXPTIME"))
+    if value is None or str(value).strip() == "":
+        return "0s"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        token = str(value).strip()
+    else:
+        token = str(int(number)) if number.is_integer() else f"{number:g}"
+    safe_token = "".join(
+        character if character.isalnum() or character in ".-" else "_"
+        for character in token
+    )
+    return f"{safe_token}s"
 
 def filter_name_from_header(header):
     """Retourne le nom canonique du filtre stocké dans un header FITS OHP."""
