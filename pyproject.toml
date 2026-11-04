@@ -12,6 +12,7 @@ dependencies = [
     "astropy>=8.0.2",
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
+    "pyinstaller>=6.22.3",
     "pyside6>=6.9.2",
     "python-dateutil>=3.0.0",
 ]

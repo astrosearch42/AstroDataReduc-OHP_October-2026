@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .align_images import align_images, align_images_basic
+from .align_images import align_images, align_images_basic, align_images_superposed
 from .combine_colors import align_channels, combine_channels, detect_channel_candidates
 from .make_masters import make_master_dark, make_master_flat, make_master_offset
 from .reduce_fits import reduce_images
@@ -613,6 +613,13 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda checked=False, k=key: self.start(k))
             actions_layout.addWidget(button)
             self.buttons[key] = button
+        for control in (
+            self.dark_calibration,
+            self.bias_calibration,
+            self.no_calibration,
+            self.flat_calibration,
+        ):
+            control.toggled.connect(lambda checked=False: self.update_buttons())
         alignment_row = QHBoxLayout()
         self.buttons["align"] = QPushButton("Aligner")
         self.buttons["align"].clicked.connect(lambda: self.start("align"))
@@ -620,8 +627,13 @@ class MainWindow(QMainWindow):
         self.buttons["align_basic"].clicked.connect(
             lambda: self.start("align_basic")
         )
+        self.buttons["align_superposed"] = QPushButton("Superposé")
+        self.buttons["align_superposed"].clicked.connect(
+            lambda: self.start("align_superposed")
+        )
         alignment_row.addWidget(self.buttons["align"])
         alignment_row.addWidget(self.buttons["align_basic"])
+        alignment_row.addWidget(self.buttons["align_superposed"])
         actions_layout.insertLayout(2, alignment_row)
         options_layout.addWidget(actions)
 
@@ -1104,16 +1116,31 @@ class MainWindow(QMainWindow):
         for candidate in parent.iterdir() if parent.is_dir() else ():
             if candidate.is_dir() and candidate.name.lower() == names[key].lower():
                 return candidate
+        if key == "lights" and any(iter_fits_files(parent)):
+            return parent
         return parent / names[key]
 
     def update_buttons(self) -> None:
         ready = self.path("lights") is not None and self.path("lights").is_dir()
-        self.buttons["masters"].setEnabled(
-            self.path("masters") is not None
+        calibration_selected = (
+            self.dark_calibration.isChecked()
+            or self.bias_calibration.isChecked()
+            or self.flat_calibration.isChecked()
         )
-        self.buttons["reduce"].setEnabled(ready and self.path("masters").is_dir())
+        self.buttons["masters"].setEnabled(self.path("masters") is not None)
+        self.buttons["reduce"].setEnabled(
+            ready
+            and (
+                not calibration_selected
+                or (
+                    self.path("masters") is not None
+                    and self.path("masters").is_dir()
+                )
+            )
+        )
         self.buttons["align"].setEnabled(ready)
         self.buttons["align_basic"].setEnabled(ready)
+        self.buttons["align_superposed"].setEnabled(ready)
         self.buttons["stack"].setEnabled(
             ready and self.path("process").is_dir()
         )
@@ -1155,10 +1182,10 @@ class MainWindow(QMainWindow):
     def make_job(self, operation: str) -> Callable[[], object] | None:
         lights = self.path("lights")
         masters = self.path("masters")
-        if operation not in {"masters", "full"} and (
-            lights is None or masters is None
-        ):
-            raise ValueError("Sélectionnez les dossiers lights et masters.")
+        if operation not in {"masters", "full"} and lights is None:
+            raise ValueError("Sélectionnez le dossier lights.")
+        if operation == "reduce" and masters is None:
+            raise ValueError("Sélectionnez le dossier masters.")
         if operation in {"masters", "full"}:
             aligner = align_images
             if operation == "full":
@@ -1175,6 +1202,10 @@ class MainWindow(QMainWindow):
                     "Alignement basique",
                     QMessageBox.ButtonRole.AcceptRole,
                 )
+                superposed_button = alignment_choice.addButton(
+                    "Superposé (sans transformation)",
+                    QMessageBox.ButtonRole.AcceptRole,
+                )
                 alignment_choice.addButton(
                     QMessageBox.StandardButton.Cancel
                 )
@@ -1184,6 +1215,8 @@ class MainWindow(QMainWindow):
                     return None
                 if clicked_button is basic_button:
                     aligner = align_images_basic
+                elif clicked_button is superposed_button:
+                    aligner = align_images_superposed
                 elif clicked_button is not advanced_button:
                     return None
             master_job, masters = self.make_master_job(lights, masters)
@@ -1243,10 +1276,16 @@ class MainWindow(QMainWindow):
                 ),
                 use_flat=self.flat_calibration.isChecked(),
             )
-        if operation in {"align", "align_basic"}:
+        if operation in {"align", "align_basic", "align_superposed"}:
             process = self.path("process")
             assert process is not None
-            aligner = align_images_basic if operation == "align_basic" else align_images
+            aligner = (
+                align_images_basic
+                if operation == "align_basic"
+                else align_images_superposed
+                if operation == "align_superposed"
+                else align_images
+            )
             return lambda: aligner(process, output_dir=process)
         process = self.path("process")
         output = self.path("stack_output")
@@ -1318,6 +1357,12 @@ class MainWindow(QMainWindow):
         masters.mkdir(parents=True, exist_ok=True)
 
         def create_masters() -> list[str]:
+            if not master_types:
+                print(
+                    "Aucune calibration sélectionnée : "
+                    "aucun master à créer."
+                )
+                return []
             bias_file = None
             if use_bias and decisions["bias"]:
                 bias_file = make_master_offset(bias, masters)

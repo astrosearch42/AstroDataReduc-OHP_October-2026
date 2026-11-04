@@ -344,6 +344,45 @@ def align_images_basic(
     )
 
 
+def align_images_superposed(
+    lights_dir: str | Path,
+    output_dir: str | Path | None = None,
+) -> list[Path]:
+    """Conserve les images réduites et ajoute uniquement le suffixe d'alignement."""
+    input_dir = Path(lights_dir)
+    if not input_dir.is_dir():
+        raise NotADirectoryError(f"Dossier lights introuvable : {input_dir}")
+
+    files = fits_files(input_dir)
+    if not files:
+        print(
+            "Aucun fichier FITS réduit (*_reduced*.fit ou *.fits) trouvé. "
+            "Il faut réduire les données avant de les aligner."
+        )
+        return []
+
+    destination_dir = Path(output_dir) if output_dir is not None else input_dir
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    aligned_files = []
+    for source_path in files:
+        data, header = read_raw_image(source_path, get_header=1)
+        destination = destination_dir / (
+            f"{source_path.stem}{ALIGNED_SUFFIX}{source_path.suffix}"
+        )
+        header["ALIGNREF"] = "NONE"
+        header["ALIGNMOD"] = "SUPERPOSED"
+        write_fits_image(destination, data, header)
+        print(
+            f"[Alignement superposé] Fichier copié sans transformation : "
+            f"{destination.name}"
+        )
+        aligned_files.append(destination)
+    print(
+        f"Alignement superposé terminé : {len(aligned_files)} image(s) produite(s)."
+    )
+    return aligned_files
+
+
 def align_selected_images(
     files: list[str | Path],
     output_dir: str | Path,

@@ -63,6 +63,10 @@ Les fichiers réduits et alignés vont dans `process`, tandis que les fichiers
 empilés `stacked_*.fits` sont écrits dans le dossier final choisi. Ce choix
 est conservé lorsque le dossier parent contenant les images d'entrée est
 changé.
+Trois modes d'alignement sont disponibles : automatique, basique et
+« Superposé ». Ce dernier ne cherche aucune étoile et ne transforme pas les
+images ; il ajoute seulement le suffixe `_aligned` pour permettre leur
+empilement.
 Pour les images à matrice de Bayer, le débayering est réalisé avant
 l'alignement afin que l'interpolation d'astroalign ne mélange pas les pixels
 R, G et B de la mosaïque. L'empilement produit alors directement un cube RGB.
@@ -134,6 +138,12 @@ correspondre aux lights.
 Le choix Bias/Dark est exclusif et le master choisi doit exister lorsqu'une
 correction est activée. Le bouton « Tout le processus » enchaîne la création
 des masters, la réduction, l'alignement et l'empilement.
+Lorsque « Aucune correction » et le flat sont désactivés, les lights sont
+tout de même réduites puis peuvent être alignées et empilées sans master DOF.
+Dans ce cas, les boutons de traitement restent disponibles : la réduction,
+l'alignement et l'empilement s'effectuent sans master de calibration.
+L'interface accepte également un dossier sélectionné contenant directement
+les lights, avec `masters` et `process` à côté, sans sous-dossier `lights`.
 
 <!--
 ## Limites scientifiques
@@ -142,6 +152,29 @@ La réduction peut utiliser un master dark, mais les données photo du dépôt n
 
 La photométrie quantitative nécessite en plus une calibration en magnitude, une correction de l'extinction atmosphérique et une estimation des incertitudes.
 -->
+
+## Installation avec PyInstaller
+
+Pour créer un executable de l'application Qt6 il faut utiliser PyInstaller. Tout d'abord il faut initialiser PyInstaller déjà présent dans les packages `uv` :
+
+```bash
+uv sync
+```
+
+Pour ensuite compiler l'executable : 
+
+```bash
+uv run pyinstaller `
+  --name AstroDataReduc `
+  --onefile `
+  --windowed `
+  --clean `
+  --paths src `
+  --collect-all PySide6 `
+  src\astrodatareduc_ohp_october_2026\gui.py
+```
+
+L'executable se trouvera dans le dossier `\dist\AstroDataReduc\`.
 
 ## Stockage des fichiers FITS
 
