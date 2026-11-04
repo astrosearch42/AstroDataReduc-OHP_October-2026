@@ -339,6 +339,19 @@ def print_header(file, keywords_list = None, l=0):
                 else:
                     print(f"{keyword:8s} = Introuvable dans l'header")
 
+def modify_header(file, keyword, value):
+    """Modifie un mot-clé dans l'header d'un fichier FITS."""
+    if keyword == "EXPTIME":
+        try:
+            value = float(value)
+        except ValueError as exc:
+            raise ValueError(f"Valeur invalide pour EXPTIME : {value!r}") from exc
+    
+    with fits.open(file, mode='update') as fits_file:
+        header = fits_file[0].header
+        header[keyword] = value
+        fits_file.flush()  # Sauvegarde les modifications
+
 ### Code annexe
 def tk_window_folder_selection():
     """
