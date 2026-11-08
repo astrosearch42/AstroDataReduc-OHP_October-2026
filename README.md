@@ -140,8 +140,8 @@ sans aucun DOF est donc autorisée.
 
 Le bouton « Créer les masters » ne demande que les dossiers nécessaires aux
 corrections choisies. Un flat peut être construit sans master bias. Avec
-l'option Dark, il produit aussi `master_dark.fits`. Les darks doivent
-correspondre aux lights.
+l'option Dark, il produit un master dark par durée d'exposition
+(`master_dark_<durée>s.fits`). Les darks doivent correspondre aux lights.
 
 Le choix Bias/Dark est exclusif et le master choisi doit exister lorsqu'une
 correction est activée. Le bouton « Tout le processus » enchaîne la création

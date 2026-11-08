@@ -128,30 +128,48 @@ def make_master_flat(
 
 
 def make_master_dark(dark_dir, output_dir=MASTER_DIR):
-    """Crée un master dark médian incluant le niveau de bias de la caméra."""
+    """Crée un master dark médian par durée d'exposition."""
     files = iter_fits_files(dark_dir)
     if not files:
         raise FileNotFoundError(f"Aucune image dark trouvée dans {dark_dir}")
-    first, header = read_raw_image(files[0], get_header=1)
-    if first.ndim != 2:
-        raise ValueError("Les images dark doivent être en deux dimensions")
-    stack = np.empty((len(files), *first.shape), dtype=np.float32)
-    for index, file in enumerate(files):
-        data = np.asarray(read_raw_image(file), dtype=np.float32)
-        if data.shape != first.shape:
-            raise ValueError(f"Les images dark ont des dimensions incompatibles : {file}")
-        stack[index] = data
-        print(f"Dark en cours : {index + 1}/{len(files)}")
-    result = np.median(stack, axis=0)
+
+    files_by_exposure = {}
+    headers_by_exposure = {}
+    for file in files:
+        _, header = read_raw_image(file, get_header=1)
+        exposure = exposure_token(header)
+        files_by_exposure.setdefault(exposure, []).append(file)
+        headers_by_exposure.setdefault(exposure, header)
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    output = Path(output_dir) / f"master_dark_{exposure_token(header)}.fits"
-    header["OBJECT"] = "MASTER_DARK"
-    header["CALIBRAT"] = "BIAS+DARK"
-    header["COMBINE"] = "MEDIAN"
-    header["NCOMBINE"] = len(files)
-    write_fits_image(output, result.astype(np.float32), header)
-    print(f"Master dark créé et enregistré dans {output}")
-    return output
+    outputs = []
+    for exposure, exposure_files in sorted(files_by_exposure.items()):
+        first = read_raw_image(exposure_files[0])
+        if first.ndim != 2:
+            raise ValueError("Les images dark doivent être en deux dimensions")
+        stack = np.empty((len(exposure_files), *first.shape), dtype=np.float32)
+        for index, file in enumerate(exposure_files):
+            data = np.asarray(read_raw_image(file), dtype=np.float32)
+            if data.shape != first.shape:
+                raise ValueError(
+                    f"Les images dark ont des dimensions incompatibles : {file}"
+                )
+            stack[index] = data
+            print(
+                f"Dark {exposure} en cours : "
+                f"{index + 1}/{len(exposure_files)}"
+            )
+        result = np.median(stack, axis=0)
+        output = Path(output_dir) / f"master_dark_{exposure}.fits"
+        header = headers_by_exposure[exposure]
+        header["OBJECT"] = "MASTER_DARK"
+        header["CALIBRAT"] = "BIAS+DARK"
+        header["COMBINE"] = "MEDIAN"
+        header["NCOMBINE"] = len(exposure_files)
+        write_fits_image(output, result.astype(np.float32), header)
+        outputs.append(output)
+        print(f"Master dark créé et enregistré dans {output}")
+    return outputs
 
 
 def main():

@@ -27,6 +27,10 @@ DATADIR_GUI = str(DATA_DIR / "OBJ")
 
 ### Dictionnaires utiles à modifier si nécessaire
 FLTRNM_OHP = {
+    'R': 'R',
+    'V': 'V',
+    'B': 'B',
+    'CH4': 'CH4',
     'R Cousin': 'R',
     'R Cousins': 'R',
     'V Cousin': 'V',
@@ -159,7 +163,7 @@ def existing_master_files_by_type(directory):
         ],
         "dark": [
             path for path in masters
-            if path.stem.lower() == "master_dark"
+            if path.stem.lower().startswith("master_dark")
         ],
     }
 
