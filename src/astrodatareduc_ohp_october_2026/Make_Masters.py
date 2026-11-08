@@ -40,7 +40,7 @@ def make_master_offset(offset_dir=OFFSET_DIR, output_dir=MASTER_DIR):
     header['OBJECT'] = 'MASTER_BIAS'
     exposure = exposure_token(header_ori)
     master_bias_file=os.path.join(str(output_dir), f'master_bias_{exposure}.fits')
-    for keyword in ('FLTRNM', 'TM-EXPOS', 'EXPTIME'):
+    for keyword in ('FILTER', 'TM-EXPOS', 'EXPTIME'):
         header.remove(keyword, ignore_missing=True)
     header['CALIBRAT'] = 'BIAS'
     header['COMBINE'] = 'MEDIAN'
@@ -53,6 +53,7 @@ def make_master_flat(
     flat_dir=FLAT_DIR,
     master_bias_file=_DEFAULT_MASTER_BIAS,
     output_dir=MASTER_DIR,
+    filter_keyword="FLTRNM",
 ):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     if master_bias_file is _DEFAULT_MASTER_BIAS:
@@ -60,17 +61,18 @@ def make_master_flat(
     master_bias = None
     if master_bias_file is not None and os.path.exists(master_bias_file):
         master_bias = read_raw_image(master_bias_file)
-    master_flat_file = None
+    master_flat_files = []
 
     flat_dir = Path(flat_dir)
-    direct_files = iter_fits_files(flat_dir)
-    nested_files = iter_fits_files_recursive(flat_dir)
-    files = nested_files if any(file.parent != flat_dir for file in nested_files) else direct_files
+    files = iter_fits_files_recursive(flat_dir)
     files = [file for file in files if not Path(file).stem.endswith("_norm")]
     files_by_filter = {}
+    filter_keyword = filter_keyword.strip()
+    if not filter_keyword:
+        raise ValueError("La clé FITS du filtre ne peut pas être vide.")
     for file in files:
         _, header = read_raw_image(file, get_header=1)
-        filter_name = filter_name_from_header(header)
+        filter_name = filter_name_from_header(header, filter_keyword)
         files_by_filter.setdefault(filter_name, []).append(file)
 
     if not files_by_filter:
@@ -113,15 +115,16 @@ def make_master_flat(
         header=header_ori
         header['OBJECT']='MASTER_FLAT'
         if filter_name is None:
-            header.remove("FLTRNM", ignore_missing=True)
+            header.remove(filter_keyword, ignore_missing=True)
         else:
             header["FLTRCAL"] = filter_name
         header['CALIBRAT'] = 'FLAT'
         header['COMBINE'] = 'MEDIAN'
         header['NCOMBINE'] = nfiles
         write_fits_image(master_flat_file, result.astype(np.float32), header)
+        master_flat_files.append(master_flat_file)
         print(f'Master flat créé et enregistré dans {master_flat_file}')
-    return master_flat_file
+    return master_flat_files
 
 
 def make_master_dark(dark_dir, output_dir=MASTER_DIR):
@@ -173,7 +176,13 @@ def main():
         master_bias = fits_path(MASTER_DIR, "master_bias")
 
     if decisions["flat"]:
-        make_master_flat(master_bias_file=master_bias)
+        filter_keyword = input(
+            "Clé FITS contenant le nom du filtre [FILTER] : "
+        ).strip() or "FILTER"
+        make_master_flat(
+            master_bias_file=master_bias,
+            filter_keyword=filter_keyword,
+        )
     if decisions["dark"]:
         dark_dir = Path(os.path.join(os.path.dirname(FLAT_DIR), "darks"))
         if dark_dir.is_dir():

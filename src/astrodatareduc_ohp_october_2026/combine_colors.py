@@ -300,6 +300,126 @@ def combine_channels(
     return output_path
 
 
+def _custom_source_target(source: str) -> str:
+    return {"R": "R", "G": "G", "B": "B", "HA": "R", "OIII": "G", "IRPASS": "B"}[
+        source
+    ]
+
+
+def _read_aligned_custom_sources(
+    directory: str | Path,
+    selected_files: dict[str, list[Path]],
+) -> tuple[dict[str, np.ndarray], fits.Header]:
+    sources = [
+        (source, path)
+        for source, paths in selected_files.items()
+        for path in paths
+        if path is not None
+    ]
+    if not sources:
+        raise ValueError("Sélectionnez au moins un fichier pour la recombinaison personnalisée.")
+    reference = next(
+        (path for source in ("R", "G", "B", "HA", "OIII", "IRPASS")
+         for candidate in selected_files.get(source, [])
+         if (path := candidate) is not None),
+        sources[0][1],
+    )
+    aligned_dir = Path(directory) / ".recombination_aligned"
+    source_paths = list(dict.fromkeys(path for _, path in sources))
+    expected_aligned = {
+        aligned_dir / f"{path.stem}_aligned{path.suffix}"
+        for path in source_paths
+    }
+    existing_aligned = set(aligned_dir.iterdir()) if aligned_dir.is_dir() else set()
+    if not expected_aligned.issubset(existing_aligned):
+        align_selected_images(source_paths, aligned_dir, reference_file=reference)
+    data_by_source: dict[str, list[np.ndarray]] = {}
+    first_header: fits.Header | None = None
+    shape: tuple[int, ...] | None = None
+    for source, path in sources:
+        aligned = aligned_dir / f"{path.stem}_aligned{path.suffix}"
+        data, header = read_raw_image(aligned, get_header=1)
+        if data.ndim != 2:
+            raise ValueError(f"L'image {path.name} doit être 2D.")
+        if shape is None:
+            shape = data.shape
+            first_header = header
+        elif data.shape != shape:
+            raise ValueError("Toutes les images personnalisées doivent avoir la même taille.")
+        data_by_source.setdefault(source, []).append(np.asarray(data, dtype=np.float32))
+    assert first_header is not None
+    return (
+        {source: np.mean(values, axis=0) for source, values in data_by_source.items()},
+        first_header,
+    )
+
+
+def combine_custom_channels(
+    directory: str | Path,
+    selected_files: dict[str, list[Path]],
+    narrowband_coefficients: dict[str, float] | None = None,
+    output_file: str | Path | None = None,
+) -> Path:
+    """Combine une sélection libre de fichiers dans un cube RGB."""
+    data_by_source, header = _read_aligned_custom_sources(directory, selected_files)
+    coefficients = narrowband_coefficients or {"R": 0.5, "G": 0.5, "B": 0.5}
+    channels: dict[str, np.ndarray] = {}
+    for output_channel in ("R", "G", "B"):
+        base = data_by_source.get(output_channel)
+        extras = [
+            data_by_source[source]
+            for source in ("HA", "OIII", "IRPASS")
+            if _custom_source_target(source) == output_channel
+            and source in data_by_source
+        ]
+        if base is None and not extras:
+            channels[output_channel] = np.zeros_like(next(iter(data_by_source.values())))
+            continue
+        if base is None:
+            channels[output_channel] = np.mean(extras, axis=0)
+        elif not extras:
+            channels[output_channel] = base
+        else:
+            coefficient = coefficients[output_channel]
+            channels[output_channel] = (
+                (1 - coefficient) * base + coefficient * np.mean(extras, axis=0)
+            )
+    output_path = (
+        Path(output_file)
+        if output_file is not None
+        else Path(directory) / "custom_recombined.fits"
+    )
+    header = header.copy()
+    header["RGBORDER"] = "RGB"
+    header["RGBMODE"] = "CUSTOM"
+    header["RGBFILE"] = "CUSTOM FITS recombination"
+    header["OBJECT"] = "CUSTOM_RGB"
+    write_fits_image(output_path, np.stack([channels["R"], channels["G"], channels["B"]]), header)
+    print(f"Image personnalisée créée : {output_path}")
+    return output_path
+
+
+def align_custom_channels(
+    directory: str | Path,
+    selected_files: dict[str, list[Path]],
+    basic: bool = False,
+) -> Path:
+    sources = [
+        path for paths in selected_files.values() for path in paths if path is not None
+    ]
+    if not sources:
+        raise ValueError("Sélectionnez au moins un fichier pour la recombinaison personnalisée.")
+    reference = next(
+        (path for source in ("R", "G", "B", "HA", "OIII", "IRPASS")
+         for path in selected_files.get(source, []) if path is not None),
+        sources[0],
+    )
+    aligned_dir = Path(directory) / ".recombination_aligned"
+    aligner = align_selected_images_basic if basic else align_selected_images
+    aligner(list(dict.fromkeys(sources)), aligned_dir, reference_file=reference)
+    return aligned_dir
+
+
 def resolve_channel_files(
     directory: str | Path,
     filter_keyword: str,
@@ -330,7 +450,7 @@ def resolve_channel_files(
 
 def align_channels(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
     mode: str = "RGB",
     selected_files: dict[str, Path] | None = None,
     basic: bool = False,
@@ -360,7 +480,7 @@ def align_channels(
 
 def combine_colors(
     directory: str | Path,
-    filter_keyword: str = "FLTRNM",
+    filter_keyword: str = "FILTER",
     output_file: str | Path | None = None,
 ) -> Path:
     """Compatibilité : combine les trois images FITS RGB."""

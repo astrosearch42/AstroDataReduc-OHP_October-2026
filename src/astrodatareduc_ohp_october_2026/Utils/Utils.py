@@ -28,10 +28,19 @@ DATADIR_GUI = str(DATA_DIR / "OBJ")
 ### Dictionnaires utiles à modifier si nécessaire
 FLTRNM_OHP = {
     'R Cousin': 'R',
+    'R Cousins': 'R',
     'V Cousin': 'V',
+    'V Cousins': 'V',
     'B Cousin': 'B',
+    'B Cousins': 'B',
+    'Bleu': 'B',
     'Ha Baader': 'Ha',
+    'Halpha': 'Ha',
     'OIII Baader': 'O3',
+    'SDSS g': 'G',
+    'SDSS i': 'I',
+    'SDSS r': 'R',
+    'SDSS z': 'Z',
 }
 FITS_SUFFIXES = (".fit", ".fits")
 
@@ -106,9 +115,9 @@ def exposure_token(header):
     )
     return f"{safe_token}s"
 
-def filter_name_from_header(header):
+def filter_name_from_header(header, filter_keyword="FLTRNM"):
     """Retourne le nom canonique du filtre stocké dans un header FITS OHP."""
-    raw_filter = header.get("FLTRNM")
+    raw_filter = header.get(filter_keyword)
     if raw_filter is None:
         return None
     filter_name = raw_filter.strip()
@@ -369,7 +378,7 @@ def print_header(file, keywords_list = None, l=0):
                     print(f"{keyword:8s} = Introuvable dans l'header")
 
 def modify_header(file, keyword, value):
-    """Modifie un mot-clé dans l'header d'un fichier FITS."""
+    """Modifie ou ajoute un mot-clé dans l'header d'un fichier FITS."""
     if keyword == "EXPTIME":
         try:
             value = float(value)
@@ -378,7 +387,10 @@ def modify_header(file, keyword, value):
     
     with fits.open(file, mode='update') as fits_file:
         header = fits_file[0].header
-        header[keyword] = value
+        if keyword in header:
+            header[keyword] = value
+        else:
+            header.append((keyword, value))
         fits_file.flush()  # Sauvegarde les modifications
 
 ### Code annexe

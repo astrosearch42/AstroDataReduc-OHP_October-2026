@@ -40,7 +40,8 @@ Lancer `astrodatareduc` puis choisir une opération :
 
 Les groupes sont séparés par objet, filtre et temps de pose. Les filtres photométriques ne doivent jamais être mélangés dans une même image empilée.
 
-Les masters sont produits dans `data/photo/masters`. Les flats bruts peuvent être placés directement dans `data/photo/flats` ou dans ses sous-dossiers ; leur filtre est déterminé depuis le header OHP `FLTRNM`, et non depuis le nom du dossier. Les fichiers suffixés `_norm` sont ignorés comme produits dérivés. Si aucun flat ni aucune image ne contient de filtre, un master flat générique est utilisé.
+Les masters sont produits dans `data/photo/masters`. Les flats bruts peuvent être placés directement dans `data/photo/flats` ou dans ses sous-dossiers ; lors de la création des masters flats, la clé FITS contenant le filtre est demandée dans l'interface (avec `FILTER` par défaut) ou en ligne de commande. Elle n'est pas déduite du nom du dossier. Les fichiers suffixés `_norm` sont ignorés comme produits dérivés. Si aucun flat ni aucune image ne contient de filtre, un master flat générique est utilisé.
+Lorsque plusieurs filtres sont présents, les flats sont regroupés par filtre et un master flat distinct est créé pour chaque filtre (`master_flat_R`, `master_flat_G`, etc.) ; ils ne sont jamais mélangés.
 
 ## Application Qt6
 
@@ -75,13 +76,14 @@ L'onglet **Console** affiche l'avancement des opérations. L'onglet **Visionneus
 
 L'onglet **Recombinaison RGB** permet de sélectionner un dossier contenant les
 fichiers FITS empilés. La clé FITS contenant le filtre est configurable
-(`FLTRNM` par défaut). Le bouton de détection affiche les fichiers associés à
+(`FILTER` par défaut). Le bouton de détection affiche les fichiers associés à
 chaque canal et la valeur lue dans leur header. Quatre modes sont disponibles :
 `RGB` (R/G/B), `HOO` (Ha/OIII/OIII), `SHO` (SII/Ha/OIII) et
 `RGB + HOO` (R+Ha/G+OIII/B+OIII) et `RGB + SHO`
 (R+SII/G+Ha/B+OIII). Les filtres OHP
-`R Cousins`, `V Cousins`, `B Cousins`, `H Alpha ohp 6565` et `O3 ohp 5007`
-sont reconnus. Après la détection, le bouton « Aligner les images » aligne les
+`R Cousin`, `V Cousin`, `B Cousin`, `Ha Baader`, `Halpha`,
+`OIII Baader`, `SDSS g`, `SDSS r`, `SDSS i` et `SDSS z` sont reconnus.
+Après la détection, le bouton « Aligner les images » aligne les
 fichiers sur le canal rouge avec `astroalign` et conserve les résultats dans
 `.recombination_aligned`. Le bouton « Recombiner les canaux » réutilise ensuite
 ces fichiers alignés, puis le résultat est écrit sous
@@ -115,6 +117,12 @@ sont appliqués après normalisation des images :
 RGB+HOO : R'=(1-aR)R+aR Ha, G'=(1-aG)G+aG OIII, B'=(1-aB)B+aB OIII
 RGB+SHO : R'=(1-aR)R+aR SII, G'=(1-aG)G+aG Ha, B'=(1-aB)B+aB OIII
 ```
+
+Le mode **Personnalisé** permet de choisir zéro, un ou plusieurs fichiers pour
+chacun des canaux `R`, `G`, `B`, `Ha`, `OIII` et `IR pass`. Les fichiers
+supplémentaires sont mélangés avec les canaux RGB à l'aide des sliders :
+`Ha` contribue au rouge, `OIII` au vert et `IR pass` au bleu. Un canal RGB
+sans fichier est remplacé par un plan noir.
 
 La visionneuse permet de choisir un étirement d'affichage. Elle détecte aussi les images Bayer contenant `BAYERPAT` : la débayerisation automatique ne modifie pas le fichier original. Le bouton dédié permet d'enregistrer une version débayerisée.
 

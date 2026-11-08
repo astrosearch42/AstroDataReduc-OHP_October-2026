@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -37,7 +38,13 @@ from PySide6.QtWidgets import (
 )
 
 from .align_images import align_images, align_images_basic, align_images_superposed
-from .combine_colors import align_channels, combine_channels, detect_channel_candidates
+from .combine_colors import (
+    align_channels,
+    align_custom_channels,
+    combine_channels,
+    combine_custom_channels,
+    detect_channel_candidates,
+)
 from .make_masters import make_master_dark, make_master_flat, make_master_offset
 from .reduce_fits import reduce_images
 from .stack_images import stack_images
@@ -464,6 +471,9 @@ class MainWindow(QMainWindow):
         self.keep_output_path = False
         self.master_keep_output = True
         self.rgb_selected_files: dict[str, Path] = {}
+        self.rgb_custom_files: dict[str, list[Path]] = {
+            channel: [] for channel in ("R", "G", "B", "HA", "OIII", "IRPASS")
+        }
         self.rgb_selection_context: tuple[str, str, str] | None = None
         self.rgb_files_valid = False
         self.rgb_aligned_valid = False
@@ -729,6 +739,15 @@ class MainWindow(QMainWindow):
         self.master_calibration_row = calibration_row
         form.addRow("Calibration du flat", calibration_row)
 
+        self.master_filter_keyword = QLineEdit("FILTER")
+        self.master_filter_keyword.setPlaceholderText(
+            "Clé FITS contenant le nom du filtre"
+        )
+        self.master_filter_keyword.setToolTip(
+            "Clé FITS contenant le nom du filtre, par exemple FILTER ou FILTER."
+        )
+        form.addRow("Clé FITS du filtre", self.master_filter_keyword)
+
         layout.addLayout(form)
         self.master_status = QLabel(
             "Les fichiers produits incluront le temps d'exposition détecté "
@@ -747,6 +766,7 @@ class MainWindow(QMainWindow):
         is_flat = self.master_type.currentData() == "flat"
         self.master_calibration.setEnabled(is_flat)
         self.master_calibration_button.setEnabled(is_flat)
+        self.master_filter_keyword.setEnabled(is_flat)
 
     def choose_master_input(self) -> None:
         previous = self.master_input.text() or DATADIR_GUI
@@ -793,6 +813,7 @@ class MainWindow(QMainWindow):
         input_dir = Path(self.master_input.text().strip())
         output_dir = Path(self.master_output.text().strip())
         calibration = Path(self.master_calibration.text().strip())
+        filter_keyword = self.master_filter_keyword.text().strip()
         if not input_dir.is_dir():
             QMessageBox.warning(self, "Configuration invalide",
                                 f"Le dossier d'entrée est introuvable : {input_dir}")
@@ -810,6 +831,12 @@ class MainWindow(QMainWindow):
                 "Un master bias ou un master dark existant est requis pour un flat.",
             )
             return
+        if master_type == "flat" and not filter_keyword:
+            QMessageBox.warning(
+                self, "Configuration invalide",
+                "Indiquez la clé FITS contenant le nom du filtre.",
+            )
+            return
 
         def create_master() -> list[str]:
             if master_type == "bias":
@@ -817,8 +844,14 @@ class MainWindow(QMainWindow):
             elif master_type == "dark":
                 result = make_master_dark(input_dir, output_dir)
             else:
-                result = make_master_flat(input_dir, calibration, output_dir)
-            return [str(result)] if result is not None else []
+                result = make_master_flat(
+                    input_dir, calibration, output_dir, filter_keyword
+                )
+            if result is None:
+                return []
+            if isinstance(result, (list, tuple)):
+                return [str(path) for path in result]
+            return [str(result)]
 
         self.start_operation(f"master_{master_type}", create_master)
 
@@ -840,17 +873,54 @@ class MainWindow(QMainWindow):
         self.rgb_filter_keyword = QLineEdit("FILTER")
         self.rgb_filter_keyword.textChanged.connect(self.invalidate_rgb_detection)
         self.rgb_filter_keyword.setToolTip(
-            "Clé FITS contenant le nom du filtre, par exemple FLTRNM ou FLTR."
+            "Clé FITS contenant le nom du filtre, par exemple FILTER ou FLTR."
         )
         form.addRow("Clé FITS du filtre", self.rgb_filter_keyword)
         self.rgb_mode = QComboBox()
         self.rgb_mode.addItems(
-            ["RGB", "HOO", "SHO", "RGB+Ha", "RGB+HOO", "RGB+SHO"]
+            ["RGB", "HOO", "SHO", "RGB+Ha", "RGB+HOO", "RGB+SHO", "Personnalisé"]
         )
         self.rgb_mode.currentTextChanged.connect(self.update_narrowband_controls)
         self.rgb_mode.currentTextChanged.connect(self.invalidate_rgb_detection)
         form.addRow("Mode de recombinaison", self.rgb_mode)
+
+        self.rgb_custom_group = QGroupBox("Canaux personnalisés")
+        custom_layout = QVBoxLayout(self.rgb_custom_group)
+        self.rgb_custom_labels: dict[str, QLabel] = {}
+        self.rgb_custom_add_buttons: dict[str, QPushButton] = {}
+        self.rgb_custom_remove_buttons: dict[str, QPushButton] = {}
+        custom_names = {
+            "R": "R", "G": "G", "B": "B", "HA": "Ha", "OIII": "OIII", "IRPASS": "IR pass"
+        }
+        for channel, label in custom_names.items():
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            selected_label = QLabel("Aucun fichier")
+            selected_label.setWordWrap(True)
+            choose = QPushButton("Choisir…")
+            choose.clicked.connect(
+                lambda _checked=False, key=channel: self.choose_custom_file(key)
+            )
+            add = QPushButton("Ajouter")
+            add.setVisible(False)
+            add.clicked.connect(
+                lambda _checked=False, key=channel: self.choose_custom_file(key)
+            )
+            remove = QPushButton("Retirer")
+            remove.setVisible(False)
+            remove.clicked.connect(
+                lambda _checked=False, key=channel: self.remove_custom_file(key)
+            )
+            row.addWidget(selected_label, 1)
+            row.addWidget(choose)
+            row.addWidget(add)
+            row.addWidget(remove)
+            custom_layout.addLayout(row)
+            self.rgb_custom_labels[channel] = selected_label
+            self.rgb_custom_add_buttons[channel] = add
+            self.rgb_custom_remove_buttons[channel] = remove
         layout.addLayout(form)
+        layout.addWidget(self.rgb_custom_group)
 
         coefficients = QGroupBox("Contribution narrowband")
         coefficients_layout = QVBoxLayout(coefficients)
@@ -935,6 +1005,8 @@ class MainWindow(QMainWindow):
         self.rgb_files_valid = False
         self.rgb_aligned_valid = False
         self.rgb_selected_files = {}
+        if self.rgb_mode.currentText() != "Personnalisé":
+            self.rgb_custom_files = {channel: [] for channel in self.rgb_custom_files}
         self.rgb_selection_context = None
         self.rgb_alignment_context = None
         self.rgb_recombination_pending = False
@@ -943,6 +1015,69 @@ class MainWindow(QMainWindow):
             self.combine_button.setEnabled(False)
             self.align_button.setEnabled(False)
             self.rgb_basic_align_button.setEnabled(False)
+
+    def choose_custom_file(self, channel: str) -> None:
+        directory = self.rgb_folder.text().strip() or DATADIR_GUI
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Sélectionner le fichier du canal {channel}",
+            directory,
+            "FITS (*.fit *.fits)",
+        )
+        if not path:
+            return
+        selected_path = Path(path).resolve()
+        if any(
+            selected_path == existing.resolve()
+            for existing in self.rgb_custom_files[channel]
+        ):
+            QMessageBox.information(
+                self,
+                "Fichier déjà ajouté",
+                f"Le fichier {selected_path.name} est déjà présent dans le canal {channel}.",
+            )
+            return
+        self.rgb_custom_files[channel].append(selected_path)
+        names = "<br>".join(file.name for file in self.rgb_custom_files[channel])
+        self.rgb_custom_labels[channel].setText(names)
+        self.rgb_custom_add_buttons[channel].setVisible(True)
+        self.rgb_custom_remove_buttons[channel].setVisible(True)
+        self.invalidate_rgb_detection()
+
+    def remove_custom_file(self, channel: str) -> None:
+        files = self.rgb_custom_files[channel]
+        if not files:
+            return
+        choices = [str(path) for path in files]
+        selected, accepted = QInputDialog.getItem(
+            self,
+            f"Retirer un fichier du canal {channel}",
+            "Fichier à retirer :",
+            choices,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        self.rgb_custom_files[channel] = [
+            path for path in files if str(path) != selected
+        ]
+        remaining = self.rgb_custom_files[channel]
+        self.rgb_custom_labels[channel].setText(
+            "<br>".join(path.name for path in remaining) or "Aucun fichier"
+        )
+        has_files = bool(remaining)
+        self.rgb_custom_add_buttons[channel].setVisible(has_files)
+        self.rgb_custom_remove_buttons[channel].setVisible(has_files)
+        self.invalidate_rgb_detection()
+
+    def custom_files_status(self) -> str:
+        selected = [
+            f"{channel} : {', '.join(path.name for path in paths)}"
+            for channel, paths in self.rgb_custom_files.items()
+            if paths
+        ]
+        return "<br>".join(selected) or "Aucun fichier personnalisé sélectionné."
 
     def start_rgb_combination(self) -> None:
         if (
@@ -969,6 +1104,20 @@ class MainWindow(QMainWindow):
             )
             return
         mode = self.rgb_mode.currentText()
+        if mode == "Personnalisé":
+            coefficients = {
+                channel: slider.value() / 100
+                for channel, slider in self.rgb_sliders.items()
+            }
+            self.start_operation(
+                "combine_custom",
+                lambda: [combine_custom_channels(
+                    directory,
+                    self.rgb_custom_files,
+                    narrowband_coefficients=coefficients,
+                )],
+            )
+            return
         coefficients = {
             channel: slider.value() / 100
             for channel, slider in self.rgb_sliders.items()
@@ -1024,6 +1173,16 @@ class MainWindow(QMainWindow):
         keyword = self.rgb_filter_keyword.text().strip()
         mode = self.rgb_mode.currentText()
         selected_files = self.rgb_selected_files
+        if mode == "Personnalisé":
+            self.start_operation(
+                f"rgb_align_custom_{'basic_' if basic else ''}",
+                lambda: [align_custom_channels(
+                    directory,
+                    self.rgb_custom_files,
+                    basic=basic,
+                )],
+            )
+            return
         self.start_operation(
             f"rgb_align_{'basic_' if basic else ''}{mode.lower()}",
             lambda: [align_channels(
@@ -1041,8 +1200,11 @@ class MainWindow(QMainWindow):
             slider.setValue(value)
 
     def update_narrowband_controls(self, mode: str) -> None:
-        narrowband_mode = mode in {"RGB+Ha", "RGB+HOO", "RGB+SHO"}
+        narrowband_mode = mode in {"RGB+Ha", "RGB+HOO", "RGB+SHO", "Personnalisé"}
         self.rgb_coefficients_group.setEnabled(narrowband_mode)
+        is_custom_mode = mode == "Personnalisé"
+        self.rgb_custom_group.setEnabled(is_custom_mode)
+        self.rgb_custom_group.setVisible(is_custom_mode)
         for channel, slider in self.rgb_sliders.items():
             slider.setEnabled(mode != "RGB+Ha" or channel == "R")
 
@@ -1050,6 +1212,25 @@ class MainWindow(QMainWindow):
         directory = Path(self.rgb_folder.text().strip())
         keyword = self.rgb_filter_keyword.text().strip()
         mode = self.rgb_mode.currentText()
+        if mode == "Personnalisé":
+            if not any(self.rgb_custom_files.values()):
+                self.rgb_files_valid = False
+                self.combine_button.setEnabled(False)
+                self.rgb_files_status.setText(
+                    "Sélectionnez au moins un fichier personnalisé."
+                )
+                return
+            self.rgb_files_valid = True
+            self.rgb_aligned_valid = False
+            self.rgb_alignment_context = (
+                str(directory.resolve()), keyword, mode
+            )
+            self.align_button.setEnabled(self.thread is None)
+            self.combine_button.setEnabled(False)
+            self.rgb_files_status.setText(
+                "<b>Mode Personnalisé</b><br>" + self.custom_files_status()
+            )
+            return
         if not directory.is_dir():
             QMessageBox.warning(
                 self, "Configuration invalide",
@@ -1519,7 +1700,12 @@ class MainWindow(QMainWindow):
             elif use_bias:
                 bias_file = fits_path(masters, "master_bias")
             if use_flat and decisions["flat"]:
-                make_master_flat(flats, bias_file, masters)
+                make_master_flat(
+                    flats,
+                    bias_file,
+                    masters,
+                    self.master_filter_keyword.text().strip(),
+                )
             if use_dark and decisions["dark"]:
                 make_master_dark(dark, masters)
             return [] if bias_file is None else [str(bias_file)]
